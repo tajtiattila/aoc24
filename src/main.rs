@@ -25,7 +25,7 @@ macro_rules! static_mod_funcs {
     }
 }
 
-static_mod_funcs!(DAY_FNS, run as DayFunc, [day01]);
+static_mod_funcs!(DAY_FNS, run as DayFunc, [day01, day02]);
 
 mod input;
 use input::InputSource;
