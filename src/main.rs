@@ -9,6 +9,7 @@ const AOC_YEAR: u32 = 2024;
 mod extrapolate;
 mod grid;
 mod quadmap;
+mod util;
 
 // static_mod_funcs creates a static slice of `name` that
 // contains the methods `mname` as `mty` in the specified modules `m`.
