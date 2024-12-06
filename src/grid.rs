@@ -3,10 +3,39 @@ use std::collections::HashSet;
 use anyhow::{bail, Result};
 
 // Cell x and y coordinates
-pub type CellP = (i32, i32);
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Point {
+    pub const fn new(x: i32, y: i32) -> Self {
+        Self { x: x, y: y }
+    }
+
+    pub const fn xy(self) -> (i32, i32) {
+        (self.x, self.y)
+    }
+}
+
+pub const fn pt(x: i32, y: i32) -> Point {
+    Point::new(x, y)
+}
+
+impl std::ops::Add for Point {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
 
 #[allow(unused)]
-pub const STEPS: &[CellP; 4] = &[(0, -1), (0, 1), (-1, 0), (1, 0)];
+pub const STEPS: &[Point; 4] = &[pt(0, -1), pt(0, 1), pt(-1, 0), pt(1, 0)];
 
 #[allow(unused)]
 pub const DIRS: &[Dir; 4] = &[Dir::North, Dir::South, Dir::West, Dir::East];
@@ -23,7 +52,8 @@ pub enum Dir {
 
 #[allow(unused)]
 impl Dir {
-    pub fn from_xy((dx, dy): CellP) -> Option<Self> {
+    pub fn from_xy(p: Point) -> Option<Self> {
+        let (dx, dy) = p.xy();
         use std::cmp::Ordering::*;
         if dx == 0 {
             match dy.cmp(&0) {
@@ -39,6 +69,15 @@ impl Dir {
             }
         } else {
             None
+        }
+    }
+
+    pub fn right(self) -> Self {
+        match self {
+            Self::North => Self::East,
+            Self::East => Self::South,
+            Self::South => Self::West,
+            Self::West => Self::North,
         }
     }
 
@@ -60,12 +99,12 @@ impl Dir {
         }
     }
 
-    pub fn step(self, x: i32) -> CellP {
+    pub fn step(self, x: i32) -> Point {
         match self {
-            Self::North => (0, -x),
-            Self::South => (0, x),
-            Self::East => (x, 0),
-            Self::West => (-x, 0),
+            Self::North => pt(0, -x),
+            Self::South => pt(0, x),
+            Self::East => pt(x, 0),
+            Self::West => pt(-x, 0),
         }
     }
 }
@@ -79,11 +118,11 @@ pub struct Grid<T> {
 
 #[allow(unused)]
 impl<T> Grid<T> {
-    pub fn positions(&self) -> impl Iterator<Item = CellP> + '_ {
-        (0..self.dy).flat_map(|y| (0..self.dx).map(move |x| (x, y)))
+    pub fn positions(&self) -> impl Iterator<Item = Point> + '_ {
+        (0..self.dy).flat_map(|y| (0..self.dx).map(move |x| pt(x, y)))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (CellP, &T)> {
+    pub fn iter(&self) -> impl Iterator<Item = (Point, &T)> {
         std::iter::zip(self.positions(), self.m.iter())
     }
 
@@ -107,30 +146,30 @@ impl<T> Grid<T> {
         (self.dx, self.dy)
     }
 
-    pub fn to_xy(&self, p: usize) -> Option<CellP> {
+    pub fn to_xy(&self, p: usize) -> Option<Point> {
         (p < self.m.len()).then(|| {
             let i = p as i32;
-            (i % self.dx, i / self.dx)
+            pt(i % self.dx, i / self.dx)
         })
     }
 
-    pub fn to_index(&self, p: CellP) -> Option<usize> {
+    pub fn to_index(&self, p: Point) -> Option<usize> {
         self.is_inside(p).then(|| {
-            let (px, py) = p;
+            let (px, py) = p.xy();
             (px + py * self.dx) as usize
         })
     }
 
-    pub fn is_inside(&self, p: CellP) -> bool {
-        let (px, py) = p;
+    pub fn is_inside(&self, p: Point) -> bool {
+        let (px, py) = p.xy();
         px >= 0 && px < self.dx && py >= 0 && py < self.dy
     }
 
-    pub fn get(&self, p: CellP) -> Option<&T> {
+    pub fn get(&self, p: Point) -> Option<&T> {
         self.to_index(p).map(|i| &self.m[i])
     }
 
-    pub fn get_mut(&mut self, p: CellP) -> Option<&mut T> {
+    pub fn get_mut(&mut self, p: Point) -> Option<&mut T> {
         self.to_index(p).map(|i| &mut self.m[i])
     }
 
@@ -144,8 +183,7 @@ impl<T> Grid<T> {
 
 #[allow(unused)]
 impl<T: Clone> Grid<T> {
-    pub fn new(dims: CellP, v: T) -> Self {
-        let (dx, dy) = dims;
+    pub fn new((dx, dy): (i32, i32), v: T) -> Self {
         Self {
             dx,
             dy,
@@ -153,11 +191,11 @@ impl<T: Clone> Grid<T> {
         }
     }
 
-    pub fn fill_block(&mut self, p0: CellP, p1: CellP, fillc: T) {
-        let x0 = p0.0.min(p1.0).max(0);
-        let x1 = p0.0.max(p1.0).min(self.dx);
-        let y0 = p0.1.min(p1.1).max(0);
-        let y1 = p0.1.max(p1.1).min(self.dy);
+    pub fn fill_block(&mut self, p0: Point, p1: Point, fillc: T) {
+        let x0 = p0.x.min(p1.x).max(0);
+        let x1 = p0.x.max(p1.x).min(self.dx);
+        let y0 = p0.y.min(p1.y).max(0);
+        let y1 = p0.y.max(p1.y).min(self.dy);
 
         let mut s = (x0 + y0 * self.dx) as usize;
         let w = (x1 - x0) as usize;
@@ -198,7 +236,7 @@ impl Grid<u8> {
 
 #[allow(unused)]
 impl<T: PartialEq> Grid<T> {
-    pub fn find(&self, what: &T) -> Option<CellP> {
+    pub fn find(&self, what: &T) -> Option<Point> {
         self.m
             .iter()
             .position(|c| c == what)
@@ -208,7 +246,7 @@ impl<T: PartialEq> Grid<T> {
 
 #[allow(unused)]
 impl<T: PartialEq + Clone> Grid<T> {
-    pub fn flood<P>(&mut self, start: CellP, value: T, mut pred: P)
+    pub fn flood<P>(&mut self, start: Point, value: T, mut pred: P)
     where
         P: FnMut(&T) -> bool,
     {
@@ -221,7 +259,7 @@ impl<T: PartialEq + Clone> Grid<T> {
         while let Some(p) = stack.pop() {
             *self.get_mut(p).unwrap() = value.clone();
             for &d in STEPS {
-                let q = (p.0 + d.0, p.1 + d.1);
+                let q = p + d;
                 if self.is_inside(q) && !visited.contains(&q) && pred(self.get(q).unwrap()) {
                     visited.insert(q);
                     stack.push(q);
