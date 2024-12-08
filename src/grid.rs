@@ -34,6 +34,17 @@ impl std::ops::Add for Point {
     }
 }
 
+impl std::ops::Sub for Point {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        Self {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+}
+
 #[allow(unused)]
 pub const STEPS: &[Point; 4] = &[pt(0, -1), pt(0, 1), pt(-1, 0), pt(1, 0)];
 
