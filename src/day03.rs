@@ -37,5 +37,5 @@ fn star2(input: &str) -> usize {
             }
         }
     }
-    return sum;
+    sum
 }

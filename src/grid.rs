@@ -11,7 +11,7 @@ pub struct Point {
 
 impl Point {
     pub const fn new(x: i32, y: i32) -> Self {
-        Self { x: x, y: y }
+        Self { x, y }
     }
 
     pub const fn xy(self) -> (i32, i32) {

@@ -20,7 +20,7 @@ fn parse_print_job(input: &str) -> Result<PrintJob> {
 
     let mut it = input.lines();
 
-    while let Some(line) = it.next() {
+    for line in it.by_ref() {
         let line = line.trim();
         if line.is_empty() {
             break;
@@ -31,7 +31,7 @@ fn parse_print_job(input: &str) -> Result<PrintJob> {
         pj.ord.push((x.parse()?, y.parse()?));
     }
 
-    while let Some(line) = it.next() {
+    for line in it {
         pj.upd.push(
             line.trim()
                 .split(',')

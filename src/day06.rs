@@ -9,12 +9,7 @@ pub fn run(input: &str) -> Result<String> {
 }
 
 fn find_start(grid: &Grid<u8>) -> Option<Point> {
-    for p in grid.positions() {
-        if grid.get(p) == Some(&b'^') {
-            return Some(p);
-        }
-    }
-    return None;
+    grid.positions().find(|&p| grid.get(p) == Some(&b'^'))
 }
 
 fn stars(grid: &Grid<u8>, start: Point, dir: Dir) -> (usize, usize) {

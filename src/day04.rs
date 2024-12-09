@@ -21,7 +21,7 @@ fn star1(grid: &Grid<u8>) -> usize {
 
     grid.positions()
         .flat_map(|p| dirs.map(|d| (p, d)))
-        .filter(|(p, d)| is_grid_string(&grid, *p, *d, "XMAS"))
+        .filter(|(p, d)| is_grid_string(grid, *p, *d, "XMAS"))
         .count()
 }
 

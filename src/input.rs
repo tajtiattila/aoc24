@@ -81,7 +81,7 @@ Set it to the value of the `session` cookie from the advent of code website."
             }
         }
         path.push(day.to_string());
-        if let Err(err) = fs::write(&path, &contents) {
+        if let Err(err) = fs::write(&path, contents) {
             eprintln!("error writing cache file {:?}: {}", path, err);
         }
     }
