@@ -34,6 +34,13 @@ impl std::ops::Add for Point {
     }
 }
 
+impl std::ops::AddAssign for Point {
+    fn add_assign(&mut self, other: Self) {
+        self.x += other.x;
+        self.y += other.y;
+    }
+}
+
 impl std::ops::Sub for Point {
     type Output = Self;
 
@@ -200,6 +207,10 @@ impl<T: Clone> Grid<T> {
             dy,
             m: vec![v; (dx * dy) as usize],
         }
+    }
+
+    pub fn fill(&mut self, fillc: T) {
+        self.m.fill(fillc)
     }
 
     pub fn fill_block(&mut self, p0: Point, p1: Point, fillc: T) {
