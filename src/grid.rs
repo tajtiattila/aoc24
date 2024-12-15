@@ -191,6 +191,12 @@ impl<T> Grid<T> {
         self.to_index(p).map(|i| &mut self.m[i])
     }
 
+    pub fn swap(&mut self, p: Point, q: Point) {
+        let p = self.to_index(p).expect("invalid swap");
+        let q = self.to_index(q).expect("invalid swap");
+        self.m.swap(p, q);
+    }
+
     pub fn show_by(&self, mut f: impl FnMut(&T) -> char) {
         for row in self.m.chunks(self.dx as usize) {
             let line: String = row.iter().map(&mut f).collect();
