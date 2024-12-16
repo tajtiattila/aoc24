@@ -60,7 +60,7 @@ pub const DIRS: &[Dir; 4] = &[Dir::North, Dir::South, Dir::West, Dir::East];
 
 // Cardinal directions
 #[allow(unused)]
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Dir {
     North,
     South,
@@ -87,6 +87,15 @@ impl Dir {
             }
         } else {
             None
+        }
+    }
+
+    pub fn left(self) -> Self {
+        match self {
+            Self::North => Self::West,
+            Self::East => Self::North,
+            Self::South => Self::East,
+            Self::West => Self::South,
         }
     }
 
