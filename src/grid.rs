@@ -206,9 +206,13 @@ impl<T> Grid<T> {
         self.m.swap(p, q);
     }
 
-    pub fn show_by(&self, mut f: impl FnMut(&T) -> char) {
+    pub fn show_by<F, U>(&self, mut f: F)
+    where
+        F: FnMut(&T) -> U,
+        U: Into<String>,
+    {
         for row in self.m.chunks(self.dx as usize) {
-            let line: String = row.iter().map(&mut f).collect();
+            let line: String = row.iter().map(|n| f(n).into()).collect();
             println!("{}", line);
         }
     }
