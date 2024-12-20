@@ -4,8 +4,12 @@ use std::collections::{HashMap, VecDeque};
 
 pub fn run(input: &str) -> Result<String> {
     let track = Track::parse(input)?;
-    let s1 = star1(&track, 100);
-    let s2 = "";
+    let path = find_path(&track);
+    let s1 = find_cheats(track.grid.dimensions(), &path)
+        .values()
+        .filter(|&n| *n >= 100)
+        .count();
+    let s2 = find_cheats_new(&path, 20, 100, |d| d >= 100);
     Ok(format!("{s1} {s2}"))
 }
 
@@ -32,12 +36,9 @@ impl Track {
     }
 }
 
-fn star1(t: &Track, min_dist: u16) -> usize {
-    find_cheats(t).values().filter(|&n| *n >= min_dist).count()
-}
+const NEW: u16 = u16::MAX;
 
-fn find_cheats(t: &Track) -> HashMap<(Point, usize), u16> {
-    const NEW: u16 = u16::MAX;
+fn find_path(t: &Track) -> Vec<Point> {
     let mut vis = Grid::new(t.grid.dimensions(), NEW);
     *vis.get_mut(t.start).unwrap() = 0;
     let mut work = VecDeque::from([(t.start, 0)]);
@@ -59,23 +60,60 @@ fn find_cheats(t: &Track) -> HashMap<(Point, usize), u16> {
     }
 
     // mark path by backtracking from end
-    let mut path = Grid::new(t.grid.dimensions(), NEW);
-    let mut work = VecDeque::from([t.end]);
-    while let Some(p) = work.pop_front() {
+    let mut path = vec![t.end];
+    while let Some(&p) = path.last() {
         let pd = *vis.get(p).unwrap();
-        *path.get_mut(p).unwrap() = pd;
-        if pd == 0 {
+        if pd == 0 || pd == NEW {
             break;
         }
         for &step in STEPS {
             let q = p + step;
             if let Some(qd) = vis.get(q) {
                 if *qd < pd {
-                    work.push_back(q);
+                    path.push(q);
                 }
             }
         }
     }
+    path.reverse();
+    path
+}
+
+fn find_cheats_new(
+    path: &[Point],
+    duration: usize,
+    min_save: usize,
+    mut check: impl FnMut(usize) -> bool,
+) -> usize {
+    path.iter()
+        .enumerate()
+        .flat_map(|(pi, &p)| {
+            path.iter()
+                .enumerate()
+                .skip(pi + min_save)
+                .map(move |(qi, &q)| (pi, p, qi, q))
+        })
+        .filter(|(pi, p, qi, q)| {
+            let d_normal = qi - pi;
+            let d_cheat = manhattan_dist(*p, *q);
+            d_cheat <= duration && check(d_normal - d_cheat)
+        })
+        .count()
+}
+
+fn manhattan_dist(p: Point, q: Point) -> usize {
+    let (dx, dy) = (p - q).xy();
+    (dx.abs() + dy.abs()) as usize
+}
+
+fn find_cheats(dim: (i32, i32), pathv: &[Point]) -> HashMap<(Point, usize), u16> {
+    let path = pathv
+        .iter()
+        .enumerate()
+        .fold(Grid::new(dim, NEW), |mut m, (i, p)| {
+            *m.get_mut(*p).unwrap() = i as u16;
+            m
+        });
 
     /*
     vis.show_by(|n| {
@@ -133,8 +171,9 @@ mod test {
 "#
         .trim();
         let track = Track::parse(sample).unwrap();
+        let path = find_path(&track);
 
-        let cheats = find_cheats(&track);
+        let cheats = find_cheats(track.grid.dimensions(), &path);
         println!("{cheats:?}");
 
         let has_cheat = |x, y, v| {
@@ -160,5 +199,10 @@ mod test {
         assert_eq!(counts.get(&2), Some(&14));
         assert_eq!(counts.get(&4), Some(&14));
         assert_eq!(counts.get(&64), Some(&1));
+
+        assert_eq!(find_cheats_new(&path, 20, 50, |d| d == 50), 32);
+        assert_eq!(find_cheats_new(&path, 20, 60, |d| d == 60), 23);
+        assert_eq!(find_cheats_new(&path, 20, 68, |d| d == 68), 14);
+        assert_eq!(find_cheats_new(&path, 20, 76, |d| d == 76), 3);
     }
 }
