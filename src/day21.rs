@@ -1,3 +1,5 @@
+use std::collections::{HashSet, VecDeque};
+
 pub fn run(input: &str) -> anyhow::Result<String> {
     let s1 = star1(input);
     let s2 = "";
@@ -5,11 +7,33 @@ pub fn run(input: &str) -> anyhow::Result<String> {
 }
 
 fn star1(input: &str) -> usize {
-    0
+    input
+        .lines()
+        .filter_map(|line| {
+            let n: usize = line.trim_end_matches('A').parse().ok()?;
+            let m = key_push_count(line)?;
+            Some(n * m)
+        })
+        .sum()
 }
 
-fn key_push_count(digits: &str) -> usize {
-    0
+fn key_push_count(digits: &str) -> Option<usize> {
+    let mut vis = HashSet::new();
+    let mut work = VecDeque::from([(State::new(), 0)]);
+    while let Some((s, count)) = work.pop_front() {
+        let next_count = count + 1;
+        for c in DIRPAD.chars() {
+            if let Some(s) = s.step(c) {
+                if digits.starts_with(s.output()) && vis.insert(s) {
+                    if digits == s.output() {
+                        return Some(next_count);
+                    }
+                    work.push_back((s, next_count));
+                }
+            }
+        }
+    }
+    None
 }
 
 // +---+---+---+
@@ -30,7 +54,7 @@ static NUMPAD: &str = "789456123*0A";
 // +---+---+---+
 static DIRPAD: &str = "*^A<v>";
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 struct State {
     keys: [u8; 8],
     ikey: u16,
@@ -53,7 +77,7 @@ impl State {
         }
     }
 
-    fn str(&self) -> &str {
+    fn output(&self) -> &str {
         std::str::from_utf8(&self.keys[0..self.ikey as usize]).unwrap()
     }
 
@@ -70,13 +94,13 @@ impl State {
             PushResult::Ack(c) => {
                 next.keys[next.ikey as usize] = c as u8;
                 next.ikey += 1;
-                return Some(next);
+                Some(next)
             }
             PushResult::Valid => {
-                return Some(next);
+                Some(next)
             }
             PushResult::Invalid => {
-                return None;
+                None
             }
         }
     }
@@ -91,7 +115,7 @@ enum PushResult {
 fn push_chain(mut c: char, robots: &mut [(&mut u16, &str)]) -> PushResult {
     use PushResult::Ack;
     for (robot, keypad) in robots {
-        let r = push(*robot, keypad, c);
+        let r = push(robot, keypad, c);
         c = match r {
             Ack(c) => c,
             _ => {
@@ -152,17 +176,17 @@ fn push(p: &mut u16, keypad: &str, c: char) -> PushResult {
 mod test {
     use super::*;
 
-    fn run(keypresses: &str) -> Option<String> {
+    fn try_keys(keypresses: &str) -> Option<String> {
         keypresses
             .chars()
             .try_fold(State::new(), |s, c| s.step(c))
-            .map(|s| s.str().to_owned())
+            .map(|s| s.output().to_owned())
     }
 
     #[test]
     fn it_works() {
         assert_eq!(
-            run("<vA<AA>>^AvAA<^A>A<v<A>>^AvA^A<vA>^A<v<A>^A>AAvA^A<v<A>A>^AAAvA<^A>A"),
+            try_keys("<vA<AA>>^AvAA<^A>A<v<A>>^AvA^A<vA>^A<v<A>^A>AAvA^A<v<A>A>^AAAvA<^A>A"),
             Some(String::from("029A"))
         );
 
@@ -175,11 +199,11 @@ mod test {
 "#
         .trim();
 
-        assert_eq!(key_push_count("029A"), 68);
-        assert_eq!(key_push_count("980A"), 60);
-        assert_eq!(key_push_count("179A"), 68);
-        assert_eq!(key_push_count("456A"), 64);
-        assert_eq!(key_push_count("379A"), 64);
+        assert_eq!(key_push_count("029A"), Some(68));
+        assert_eq!(key_push_count("980A"), Some(60));
+        assert_eq!(key_push_count("179A"), Some(68));
+        assert_eq!(key_push_count("456A"), Some(64));
+        assert_eq!(key_push_count("379A"), Some(64));
 
         assert_eq!(star1(sample), 126384);
     }
