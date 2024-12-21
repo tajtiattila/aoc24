@@ -1,5 +1,3 @@
-use crate::grid::Point;
-
 pub fn run(input: &str) -> anyhow::Result<String> {
     let s1 = star1(input);
     let s2 = "";
@@ -12,36 +10,6 @@ fn star1(input: &str) -> usize {
 
 fn key_push_count(digits: &str) -> usize {
     0
-}
-
-#[derive(Copy, Clone)]
-struct Keypad<'a> {
-    buttons: &'a str,
-    dy: usize,
-}
-
-impl<'a> Keypad<'a> {
-    const fn new(buttons: &'a str) -> Self {
-        Self{
-            buttons,
-            dy: buttons.len()/3,
-        }
-    }
-
-    fn find_key(&self, c: char) -> Option<Point> {
-        self.buttons.find(c)
-            .map(|i| Point::new((i % 3) as i32, (i / 3) as i32))
-    }
-
-    fn key_at(&self, p: u8) -> Option<char> {
-        let (x, y) = p.xy();
-        let c = if (0..3).contains(x) && (0..self.dy as i32).contains(y) {
-            self.buttons[(x + 3*y) as usize]
-        } else {
-            return None;
-        }
-        (c != '*').then_some(c)
-    }
 }
 
 // +---+---+---+
@@ -63,77 +31,112 @@ static NUMPAD: &str = "789456123*0A";
 static DIRPAD: &str = "*^A<v>";
 
 #[derive(Copy, Clone)]
-struct Robot {
-    keypad: Keypad<'static>,
-    p: Point,
-}
-
-impl Robot {
-    fn new(keypad: &'static Keypad) -> Self{
-        Self {
-            keypad,
-            p: keypad.find_key('A').unwrap(),
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
 struct State {
+    keys: [u8; 8],
+    ikey: u16,
     r0: u16,
     r1: u16,
     r2: u16,
-    keys: [8]char,
-    ikey: usize,
 }
 
 impl State {
     fn new() -> Self {
-        let np = NUMPAD.find('A').unwrap();
-        let dp = DIRPAD.find('A').unwrap();
+        let np = NUMPAD.find('A').unwrap() as u16;
+        let dp = DIRPAD.find('A').unwrap() as u16;
 
         Self {
-            r0: np,
-            r1: dp,
-            r2: dp,
-            keys: ['\0'; 8],
+            keys: [b'\0'; 8],
             ikey: 0,
+            r0: dp,
+            r1: dp,
+            r2: np,
         }
     }
 
-    fn step(&self, c: char) -> Option<Self> {
+    fn str(&self) -> &str {
+        std::str::from_utf8(&self.keys[0..self.ikey as usize]).unwrap()
+    }
 
+    fn step(&self, c0: char) -> Option<Self> {
+        let mut next = *self;
+        match push_chain(
+            c0,
+            &mut [
+                (&mut next.r0, DIRPAD),
+                (&mut next.r1, DIRPAD),
+                (&mut next.r2, NUMPAD),
+            ],
+        ) {
+            PushResult::Ack(c) => {
+                next.keys[next.ikey as usize] = c as u8;
+                next.ikey += 1;
+                return Some(next);
+            }
+            PushResult::Valid => {
+                return Some(next);
+            }
+            PushResult::Invalid => {
+                return None;
+            }
+        }
     }
 }
 
 enum PushResult {
     Invalid,
     Valid,
-    Ack
+    Ack(char),
 }
 
-fn push(&mut p: u16, keypad: &str, c: char) -> PushResult {
-    let mut (x, y) = (p%3, p/3);
+fn push_chain(mut c: char, robots: &mut [(&mut u16, &str)]) -> PushResult {
+    use PushResult::Ack;
+    for (robot, keypad) in robots {
+        let r = push(*robot, keypad, c);
+        c = match r {
+            Ack(c) => c,
+            _ => {
+                return r;
+            }
+        }
+    }
+    Ack(c)
+}
+
+fn push(p: &mut u16, keypad: &str, c: char) -> PushResult {
+    use PushResult::*;
+    let keypad = keypad.as_bytes();
+    let (mut x, mut y) = (*p % 3, *p / 3);
     match c {
-        '>' => if x < 2 {
-            x += 1;
-        } else {
-            return Invalid;
+        '>' => {
+            if x < 2 {
+                x += 1;
+            } else {
+                return Invalid;
+            }
         }
-        '<' => if x > 0 {
-            x -= 1;
-        } else {
-            return Invalid;
+        '<' => {
+            if x > 0 {
+                x -= 1;
+            } else {
+                return Invalid;
+            }
         }
-        '^' => if y > 0 {
-            y -= 1;
-        } else {
-            return Invalid;
+        '^' => {
+            if y > 0 {
+                y -= 1;
+            } else {
+                return Invalid;
+            }
         }
         'v' => {
             y += 1;
         }
-        'A' => { return Ack; },
-        _ => { return Invalid; }
+        'A' => {
+            return Ack(keypad[*p as usize] as char);
+        }
+        _ => {
+            return Invalid;
+        }
     }
     let q = x + 3 * y;
     let qs = q as usize;
@@ -149,8 +152,20 @@ fn push(&mut p: u16, keypad: &str, c: char) -> PushResult {
 mod test {
     use super::*;
 
+    fn run(keypresses: &str) -> Option<String> {
+        keypresses
+            .chars()
+            .try_fold(State::new(), |s, c| s.step(c))
+            .map(|s| s.str().to_owned())
+    }
+
     #[test]
     fn it_works() {
+        assert_eq!(
+            run("<vA<AA>>^AvAA<^A>A<v<A>>^AvA^A<vA>^A<v<A>^A>AAvA^A<v<A>A>^AAAvA<^A>A"),
+            Some(String::from("029A"))
+        );
+
         let sample = r#"
 029A
 980A
@@ -158,7 +173,7 @@ mod test {
 456A
 379A
 "#
-            .trim();
+        .trim();
 
         assert_eq!(key_push_count("029A"), 68);
         assert_eq!(key_push_count("980A"), 60);
