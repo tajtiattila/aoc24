@@ -1,6 +1,4 @@
-use crate::grid::{pt, Point};
-use std::cmp::Ordering;
-use std::collections::HashMap;
+use crate::grid::Point;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
     let s1 = star1(input);
@@ -9,182 +7,141 @@ pub fn run(input: &str) -> anyhow::Result<String> {
 }
 
 fn star1(input: &str) -> usize {
-    input.lines().map(|line| {
-        let n: usize = line.trim_end_matches('A').parse().unwrap();
-        let c = key_push_count(line);
-        n*c
-    }).sum()
+    0
 }
 
 fn key_push_count(digits: &str) -> usize {
-    let mut h = KeyPushCount(0);
-    let mut h_bind = &mut h;
-    enter(digits, &mut h_bind);
-    h.0
+    0
 }
 
-fn key_pushes(digits: &str) -> String {
-    let mut h = KeyVec(vec![]);
-    let mut h_bind = &mut h;
-    enter(digits, &mut h_bind);
-    h.0.into_iter().collect()
+#[derive(Copy, Clone)]
+struct Keypad<'a> {
+    buttons: &'a str,
+    dy: usize,
 }
 
-fn enter<H: KeypadHandler>(digits: &str, h: &mut H) {
-    let dirpad = new_dirpad();
-    let numpad = new_numpad();
-    let mut userpad = Keypad::new(&dirpad, h);
-    let mut userpad_bind = &mut userpad;
-    let mut r0pad = Keypad::new(&dirpad, &mut userpad_bind);
-    let mut r0pad_bind = &mut r0pad;
-    let mut r1pad = Keypad::new(&numpad, &mut r0pad_bind);
-    let mut r1pad_bind = &mut r1pad;
-    //let mut r2pad = Keypad::new(&numpad, &mut r1pad_bind);
-    //let mut r2pad_bind = &mut r2pad;
-    for c in digits.chars() {
-        r1pad_bind.enter(c);
+impl<'a> Keypad<'a> {
+    const fn new(buttons: &'a str) -> Self {
+        Self{
+            buttons,
+            dy: buttons.len()/3,
+        }
+    }
+
+    fn find_key(&self, c: char) -> Option<Point> {
+        self.buttons.find(c)
+            .map(|i| Point::new((i % 3) as i32, (i / 3) as i32))
+    }
+
+    fn key_at(&self, p: u8) -> Option<char> {
+        let (x, y) = p.xy();
+        let c = if (0..3).contains(x) && (0..self.dy as i32).contains(y) {
+            self.buttons[(x + 3*y) as usize]
+        } else {
+            return None;
+        }
+        (c != '*').then_some(c)
     }
 }
 
-trait KeypadHandler {
-    fn enter(&mut self, c: char);
+// +---+---+---+
+// | 7 | 8 | 9 |
+// +---+---+---+
+// | 4 | 5 | 6 |
+// +---+---+---+
+// | 1 | 2 | 3 |
+// +---+---+---+
+//     | 0 | A |
+//     +---+---+
+static NUMPAD: &str = "789456123*0A";
+
+//     +---+---+
+//     | ^ | A |
+// +---+---+---+
+// | < | v | > |
+// +---+---+---+
+static DIRPAD: &str = "*^A<v>";
+
+#[derive(Copy, Clone)]
+struct Robot {
+    keypad: Keypad<'static>,
+    p: Point,
 }
 
-struct KeyPushCount(usize);
-
-impl KeypadHandler for &mut KeyPushCount {
-    fn enter(&mut self, _: char) {
-        self.0 += 1;
-    }
-}
-struct KeyVec(Vec<char>);
-
-impl KeypadHandler for &mut KeyVec {
-    fn enter(&mut self, c: char) {
-        self.0.push(c);
-    }
-}
-
-struct Keypad<'t, 'h, H: KeypadHandler> {
-    typ: &'t KeypadType,
-    handler: &'h mut H,
-
-    c: char,
-}
-
-impl<'t, 'h, H: KeypadHandler> Keypad<'t, 'h, H> {
-    fn new(typ: &'t KeypadType, handler: &'h mut H) -> Self {
-        Self { typ, handler, c: 'A' }
-    }
-}
-
-impl<H: KeypadHandler> KeypadHandler for &mut Keypad<'_, '_, H> {
-    fn enter(&mut self, to_c: char) {
-        self.typ.cmds(self.handler, self.c, to_c);
-
-        self.c = to_c;
-    }
-}
-
-/*
-   numeric keypad
-    +---+---+---+
-    | 7 | 8 | 9 |
-    +---+---+---+
-    | 4 | 5 | 6 |
-    +---+---+---+
-    | 1 | 2 | 3 |
-    +---+---+---+
-        | 0 | A |
-        +---+---+
-*/
-fn new_numpad() -> KeypadType {
-    KeypadType::new(false, HashMap::from([
-        ('0', pt(1, 3)),
-        ('A', pt(2, 3)),
-        ('1', pt(0, 2)),
-        ('2', pt(1, 2)),
-        ('3', pt(2, 2)),
-        ('4', pt(0, 1)),
-        ('5', pt(1, 1)),
-        ('6', pt(2, 1)),
-        ('7', pt(0, 0)),
-        ('8', pt(1, 0)),
-        ('9', pt(2, 0)),
-    ]))
-}
-
-/*
-    directional keypad
-        +---+---+
-        | ^ | A |
-    +---+---+---+
-    | < | v | > |
-    +---+---+---+
-*/
-fn new_dirpad() -> KeypadType {
-    KeypadType::new(false, HashMap::from([
-        ('<', pt(0, 1)),
-        ('v', pt(1, 1)),
-        ('>', pt(2, 1)),
-        ('^', pt(1, 0)),
-        ('A', pt(2, 0)),
-    ]))
-}
-
-struct KeypadType {
-    blank_at_top: bool,
-    keys: HashMap<char, Point>,
-}
-
-impl KeypadType {
-    fn new(blank_at_top: bool, keys: HashMap<char, Point>) -> Self {
+impl Robot {
+    fn new(keypad: &'static Keypad) -> Self{
         Self {
-            blank_at_top,
-            keys,
+            keypad,
+            p: keypad.find_key('A').unwrap(),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct State {
+    r0: u16,
+    r1: u16,
+    r2: u16,
+    keys: [8]char,
+    ikey: usize,
+}
+
+impl State {
+    fn new() -> Self {
+        let np = NUMPAD.find('A').unwrap();
+        let dp = DIRPAD.find('A').unwrap();
+
+        Self {
+            r0: np,
+            r1: dp,
+            r2: dp,
+            keys: ['\0'; 8],
+            ikey: 0,
         }
     }
 
-    fn cmds<H: KeypadHandler>(&self, h: &mut H, from_c: char, to_c: char) {
-        let Some(p) = self.keys.get(&from_c) else { return; };
-        let Some(q) = self.keys.get(&to_c) else { return };
-        let mut p = *p;
-        if self.blank_at_top {
-            while p.y < q.y {
-                h.enter('v');
-                p.y += 1;
-            }
+    fn step(&self, c: char) -> Option<Self> {
+
+    }
+}
+
+enum PushResult {
+    Invalid,
+    Valid,
+    Ack
+}
+
+fn push(&mut p: u16, keypad: &str, c: char) -> PushResult {
+    let mut (x, y) = (p%3, p/3);
+    match c {
+        '>' => if x < 2 {
+            x += 1;
         } else {
-            while p.y > q.y {
-                h.enter('^');
-                p.y -= 1;
-            }
+            return Invalid;
         }
-        match p.x.cmp(&q.x) {
-            Ordering::Less => {
-                for _ in p.x..q.x {
-                    h.enter('>');
-                }
-            }
-            Ordering::Equal => {},
-            Ordering::Greater => {
-                for _ in q.x..p.x {
-                    h.enter('<');
-                }
-            }
-        }
-        if self.blank_at_top {
-            while p.y > q.y {
-                h.enter('^');
-                p.y -= 1;
-            }
+        '<' => if x > 0 {
+            x -= 1;
         } else {
-            while p.y < q.y {
-                h.enter('v');
-                p.y += 1;
-            }
+            return Invalid;
         }
-        h.enter('A');
+        '^' => if y > 0 {
+            y -= 1;
+        } else {
+            return Invalid;
+        }
+        'v' => {
+            y += 1;
+        }
+        'A' => { return Ack; },
+        _ => { return Invalid; }
+    }
+    let q = x + 3 * y;
+    let qs = q as usize;
+    if qs < keypad.len() && keypad[qs] != b'*' {
+        *p = q;
+        Valid
+    } else {
+        Invalid
     }
 }
 
