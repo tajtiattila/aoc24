@@ -36,6 +36,11 @@ fn key_push_count(digits: &str) -> Option<usize> {
     None
 }
 
+// 379A
+// ^A<<^^A>>AvvvA
+// <A>Av<<AA>^AA>AvAA^A<vAAA>^A
+// v<<A>>^AvA^Av<A<AA>>^AAvA<^A>AAvA^AvA^AA<A>Av<<A>A>^AAAvA<^A>A     .
+
 // +---+---+---+
 // | 7 | 8 | 9 |
 // +---+---+---+
@@ -53,6 +58,71 @@ static NUMPAD: &str = "789456123*0A";
 // | < | v | > |
 // +---+---+---+
 static DIRPAD: &str = "*^A<v>";
+
+type PadPos = u16;
+
+fn star1_entry(digits: &str) -> usize {
+    let s0 = numpad_entry(digits);
+    let s1 = dirpad_entry(&s0);
+    let s2 = dirpad_entry(&s1);
+    s2.len()
+}
+
+fn keypad_entry(keypad: &str, digits: &str) -> String {
+    let mut out = String::new();
+    let mut p = keypad.find('A').unwrap();
+    for q in digits.chars().filter_map(|c| keypad.find(c)) {
+        let px = (p%3) as i32;
+        let py = (p/3) as i32;
+        let qx = (q%3) as i32;
+        let qy = (q/3) as i32;
+        if px < qx {
+            for _ in px..qx {
+                out.push('>');
+            }
+        }
+        if py < qy {
+            for _ in py..qy {
+                out.push('v');
+            }
+        } else {
+            for _ in qy..py {
+                out.push('^');
+            }
+        }
+        if qx < px {
+            for _ in qx..px {
+                out.push('<');
+            }
+        }
+        out.push('A');
+        p = q;
+    }
+    out
+}
+fn numpad_entry(digits: &str) -> String {
+    keypad_entry(NUMPAD, digits)
+}
+
+fn dirpad_entry(moves: &str) -> String {
+    keypad_entry(DIRPAD, moves)
+}
+
+/*
+ * 029A
+ *
+ * v<<A>>^A<AA>
+ * <A^A
+ *
+ * <A^A^^>AvvvA
+ *
+ * < : v<<A
+ * ^ : <A
+ * v : v<A
+ * > : vA
+ */
+fn dirpad_move_ack(p0: PadPos, p1: PadPos, avoid: PadPos) {
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 struct State {
@@ -199,11 +269,28 @@ mod test {
 "#
         .trim();
 
-        assert_eq!(key_push_count("029A"), Some(68));
-        assert_eq!(key_push_count("980A"), Some(60));
-        assert_eq!(key_push_count("179A"), Some(68));
-        assert_eq!(key_push_count("456A"), Some(64));
-        assert_eq!(key_push_count("379A"), Some(64));
+        let s0 = numpad_entry("029A");
+        assert_eq!(&s0, "<A^A>^^AvvvA");
+        let s1 = dirpad_entry(&s0);
+        assert_eq!(&s1, "v<<A>>^A<A>AvA^<AA>Av<AAA>^A");
+        let s2 = dirpad_entry(&s1);
+        assert_eq!(s2.len(), 68);
+
+        assert_eq!(star1_entry("029A"), 68);
+        assert_eq!(star1_entry("980A"), 60);
+        assert_eq!(star1_entry("179A"), 68);
+        assert_eq!(star1_entry("456A"), 64);
+
+        let s0 = numpad_entry("379A");
+        assert_eq!(&s0, "^A^^<<A>>AvvvA");
+        let s1 = dirpad_entry(&s0);
+        assert_eq!(&s1, "<A>A<AAv<AA>>^AvAA^Av<AAA>^A");
+        let s2 = dirpad_entry(&s1);
+        //  <A>A<AAv<AA >>^AvAA^Av<AAA>^A
+        assert_eq!(&s2, "v<<A>>^AvA^Av<<A>>^AAv<A<A>>^AA");
+        // v<<A>>^AvA^Av<<A>>^AAv<A<A>>^AAvAA^<A>Av<A>^AA<A>Av<A<A>>^AAAvA^<A>A 
+
+        assert_eq!(star1_entry("379A"), 64);
 
         assert_eq!(star1(sample), 126384);
     }
