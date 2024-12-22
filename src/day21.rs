@@ -1,6 +1,8 @@
 use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
+    sim_rec("379A", 8);
     let s1 = star1(input);
     let s2 = "";
     Ok(format!("{s1} {s2}"))
@@ -11,29 +13,87 @@ fn star1(input: &str) -> usize {
         .lines()
         .filter_map(|line| {
             let n: usize = line.trim_end_matches('A').parse().ok()?;
-            let m = key_push_count(line)?;
+            let m = star1_moves(line);
             Some(n * m)
         })
         .sum()
 }
 
-fn key_push_count(digits: &str) -> Option<usize> {
+fn key_push_count(digits: &str) -> Option<(usize, String)> {
     let mut vis = HashSet::new();
-    let mut work = VecDeque::from([(State::new(), 0)]);
-    while let Some((s, count)) = work.pop_front() {
+    let mut work: VecDeque<(State, usize, Option<Rc<Link>>)> =
+        VecDeque::from([(State::new(), 0, None)]);
+    while let Some((s, count, pred)) = work.pop_front() {
         let next_count = count + 1;
         for c in DIRPAD.chars() {
             if let Some(s) = s.step(c) {
                 if digits.starts_with(s.output()) && vis.insert(s) {
+                    let node = Link::link(c, &pred);
                     if digits == s.output() {
-                        return Some(next_count);
+                        return Some((next_count, Link::to_string(&node)));
                     }
-                    work.push_back((s, next_count));
+                    work.push_back((s, next_count, node));
                 }
             }
         }
     }
     None
+}
+
+struct Link {
+    c: char,
+    pred: Option<Rc<Link>>,
+}
+
+impl Link {
+    fn link(c: char, pred: &Option<Rc<Link>>) -> Option<Rc<Link>> {
+        Some(Rc::new(Link {
+            c,
+            pred: pred.clone(),
+        }))
+    }
+
+    fn to_string(mut node: &Option<Rc<Link>>) -> String {
+        let mut v = vec![];
+        while let Some(rc) = node {
+            v.push(rc.c);
+            node = &rc.pred;
+        }
+        v.reverse();
+        v.into_iter().collect()
+    }
+}
+
+fn sim(keypad: &str, input: &str) -> String {
+    let mut s = String::new();
+    let mut p = keypad.find('A').unwrap();
+    let dy = (keypad.len() / 3) as i32;
+    for c in input.chars() {
+        let mut px = (p % 3) as i32;
+        let mut py = (p / 3) as i32;
+        match c {
+            '<' => {
+                px -= 1;
+            }
+            '>' => {
+                px += 1;
+            }
+            '^' => {
+                py -= 1;
+            }
+            'v' => {
+                py += 1;
+            }
+            'A' => {
+                s.push(keypad.as_bytes()[p] as char);
+            }
+            _ => {}
+        }
+        if (0..3).contains(&px) && (0..dy).contains(&py) {
+            p = (px + py * 3) as usize;
+        }
+    }
+    s
 }
 
 // 379A
@@ -50,16 +110,130 @@ fn key_push_count(digits: &str) -> Option<usize> {
 // +---+---+---+
 //     | 0 | A |
 //     +---+---+
-static NUMPAD: &str = "789456123*0A";
+static NUMPAD: &str = "....789.456.123..0A....";
 
 //     +---+---+
 //     | ^ | A |
 // +---+---+---+
 // | < | v | > |
 // +---+---+---+
-static DIRPAD: &str = "*^A<v>";
+static DIRPAD: &str = ".....^A.<v>....";
 
-type PadPos = u16;
+#[derive(Copy, Clone, Debug)]
+struct Movement {
+    dx: i32,
+    dy: i32,
+    x_first: bool,
+}
+
+impl Movement {
+    fn move_chars(&self) -> (&'static str, &'static str) {
+        if self.x_first {
+            (self.dx_chars(), self.dy_chars())
+        } else {
+            (self.dy_chars(), self.dx_chars())
+        }
+    }
+
+    fn dx_chars(&self) -> &'static str {
+        let x = self.dx;
+        if x < 0 {
+            &"<<<<<"[..(-x) as usize]
+        } else if x > 0 {
+            &">>>>>"[..x as usize]
+        } else {
+            ""
+        }
+    }
+
+    fn dy_chars(&self) -> &'static str {
+        let y = self.dy;
+        if y < 0 {
+            &"^^^^^"[..(-y) as usize]
+        } else if self.dy > 0 {
+            &"vvvvv"[..y as usize]
+        } else {
+            ""
+        }
+    }
+}
+
+fn numpad_moves(digits: &str) -> impl Iterator<Item = char> + use<'_> {
+    keypad_moves(NUMPAD, digits.chars())
+}
+
+fn dirpad_moves(input: impl Iterator<Item = char>) -> impl Iterator<Item = char> {
+    keypad_moves(DIRPAD, input)
+}
+
+fn keypad_moves<I: Iterator<Item = char>>(keypad: &str, input: I) -> impl Iterator<Item = char> + use<'_, I> {
+    let p = keypad.find('A').unwrap();
+    input
+        .scan(p, move |state, c| {
+            let p = *state;
+            let q = keypad.find(c)?;
+            *state = q;
+            let (px, py) = ((p % 4) as i32, (p / 4) as i32);
+            let (qx, qy) = ((q % 4) as i32, (q / 4) as i32);
+            let dx = qx - px;
+            let dy = qy - py;
+            // char under arm when moving x first
+            let qxc = keypad.as_bytes()[(qx + py * 4) as usize];
+            // char under arm when moving y first
+            let qyc = keypad.as_bytes()[(px + qy * 4) as usize];
+            let x_first = (dx < 0 && qxc != b'.') || qyc == b'.';
+            Some(movement_chars(dx, dy, x_first))
+        })
+        .flatten()
+}
+
+fn movement_chars(x: i32, y: i32, x_first: bool) -> impl Iterator<Item = char> {
+    let xs = if x < 0 {
+        &"<<<<<"[..(-x) as usize]
+    } else if x > 0 {
+        &">>>>>"[..x as usize]
+    } else {
+        ""
+    };
+    let ys = if y < 0 {
+        &"^^^^^"[..(-y) as usize]
+    } else if y > 0 {
+        &"vvvvv"[..y as usize]
+    } else {
+        ""
+    };
+    let (l, r) = if x_first { (xs, ys) } else { (ys, xs) };
+    l.chars().chain(r.chars()).chain(std::iter::once('A'))
+}
+
+fn star1_moves(digits: &str) -> usize {
+    numpad_moves(digits)
+        .apply(dirpad_moves)
+        .apply(dirpad_moves)
+        .count()
+}
+
+fn sim_rec(digits: &str, n: usize) {
+    let mut s = String::from(digits);
+    println!("0: {}", s);
+    let mut keypad = NUMPAD;
+    for i in 0..n {
+        let next = keypad_moves(keypad, s.chars()).collect();
+        keypad = DIRPAD;
+        s = next;
+        println!("{}: {}", i+1, s);
+    }
+    println!();
+}
+
+// https://docs.rs/apply/latest/src/apply/lib.rs.html
+pub trait Apply<Res> {
+    fn apply<F: FnOnce(Self) -> Res>(self, f: F) -> Res where Self: Sized {
+        f(self)
+    }
+}
+
+impl<T: ?Sized, Res> Apply<Res> for T { }
 
 fn star1_entry(digits: &str) -> usize {
     let s0 = numpad_entry(digits);
@@ -72,10 +246,10 @@ fn keypad_entry(keypad: &str, digits: &str) -> String {
     let mut out = String::new();
     let mut p = keypad.find('A').unwrap();
     for q in digits.chars().filter_map(|c| keypad.find(c)) {
-        let px = (p%3) as i32;
-        let py = (p/3) as i32;
-        let qx = (q%3) as i32;
-        let qy = (q/3) as i32;
+        let px = (p % 4) as i32;
+        let py = (p / 4) as i32;
+        let qx = (q % 4) as i32;
+        let qy = (q / 4) as i32;
         if px < qx {
             for _ in px..qx {
                 out.push('>');
@@ -121,8 +295,6 @@ fn dirpad_entry(moves: &str) -> String {
  * v : v<A
  * > : vA
  */
-fn dirpad_move_ack(p0: PadPos, p1: PadPos, avoid: PadPos) {
-}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 struct State {
@@ -166,12 +338,8 @@ impl State {
                 next.ikey += 1;
                 Some(next)
             }
-            PushResult::Valid => {
-                Some(next)
-            }
-            PushResult::Invalid => {
-                None
-            }
+            PushResult::Valid => Some(next),
+            PushResult::Invalid => None,
         }
     }
 }
@@ -199,42 +367,20 @@ fn push_chain(mut c: char, robots: &mut [(&mut u16, &str)]) -> PushResult {
 fn push(p: &mut u16, keypad: &str, c: char) -> PushResult {
     use PushResult::*;
     let keypad = keypad.as_bytes();
-    let (mut x, mut y) = (*p % 3, *p / 3);
-    match c {
-        '>' => {
-            if x < 2 {
-                x += 1;
-            } else {
-                return Invalid;
-            }
-        }
-        '<' => {
-            if x > 0 {
-                x -= 1;
-            } else {
-                return Invalid;
-            }
-        }
-        '^' => {
-            if y > 0 {
-                y -= 1;
-            } else {
-                return Invalid;
-            }
-        }
-        'v' => {
-            y += 1;
-        }
+    let q = match c {
+        '>' => *p + 1,
+        '<' => *p - 1,
+        '^' => *p - 4,
+        'v' => *p + 4,
         'A' => {
             return Ack(keypad[*p as usize] as char);
         }
         _ => {
             return Invalid;
         }
-    }
-    let q = x + 3 * y;
+    };
     let qs = q as usize;
-    if qs < keypad.len() && keypad[qs] != b'*' {
+    if qs < keypad.len() && keypad[qs] != b'.' {
         *p = q;
         Valid
     } else {
@@ -255,6 +401,12 @@ mod test {
 
     #[test]
     fn it_works() {
+        assert_eq!(star1_moves("029A"), 68);
+        assert_eq!(star1_moves("980A"), 60);
+        assert_eq!(star1_moves("179A"), 68);
+        assert_eq!(star1_moves("456A"), 64);
+        assert_eq!(star1_moves("379A"), 64);
+
         assert_eq!(
             try_keys("<vA<AA>>^AvAA<^A>A<v<A>>^AvA^A<vA>^A<v<A>^A>AAvA^A<v<A>A>^AAAvA<^A>A"),
             Some(String::from("029A"))
@@ -269,6 +421,9 @@ mod test {
 "#
         .trim();
 
+        assert_eq!(star1(sample), 126384);
+        //----------------------------------------------------------------
+
         let s0 = numpad_entry("029A");
         assert_eq!(&s0, "<A^A>^^AvvvA");
         let s1 = dirpad_entry(&s0);
@@ -276,10 +431,21 @@ mod test {
         let s2 = dirpad_entry(&s1);
         assert_eq!(s2.len(), 68);
 
-        assert_eq!(star1_entry("029A"), 68);
-        assert_eq!(star1_entry("980A"), 60);
-        assert_eq!(star1_entry("179A"), 68);
-        assert_eq!(star1_entry("456A"), 64);
+        let npc = |digits| numpad_moves(digits).collect::<String>();
+        assert_eq!(&npc("029A"), "<A^A^^>AvvvA");
+        assert_eq!(&npc("379A"), "^A<<^^A>>AvvvA");
+
+        let s = key_push_count("379A").unwrap().1;
+        println!("{}", s);
+        let s1 = sim(DIRPAD, &s);
+        println!("{}", s1);
+        println!("{}", sim(DIRPAD, &s1));
+        println!();
+        let z = "v<<A>>^AvA^Av<<A>>^AAv<A<A>>^AAvAA^<A>Av<A>^AA<A>Av<A<A>>^AAAvA^<A>A";
+        println!("{}", z);
+        let z1 = sim(DIRPAD, &z);
+        println!("{}", z1);
+        println!("{}", sim(DIRPAD, &z1));
 
         let s0 = numpad_entry("379A");
         assert_eq!(&s0, "^A^^<<A>>AvvvA");
@@ -288,10 +454,6 @@ mod test {
         let s2 = dirpad_entry(&s1);
         //  <A>A<AAv<AA >>^AvAA^Av<AAA>^A
         assert_eq!(&s2, "v<<A>>^AvA^Av<<A>>^AAv<A<A>>^AA");
-        // v<<A>>^AvA^Av<<A>>^AAv<A<A>>^AAvAA^<A>Av<A>^AA<A>Av<A<A>>^AAAvA^<A>A 
-
-        assert_eq!(star1_entry("379A"), 64);
-
-        assert_eq!(star1(sample), 126384);
+        // v<<A>>^AvA^Av<<A>>^AAv<A<A>>^AAvAA^<A>Av<A>^AA<A>Av<A<A>>^AAAvA^<A>A
     }
 }
