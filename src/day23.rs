@@ -79,7 +79,7 @@ fn try_expand<'a>(network: &'a Network, set: &'a CompSet) -> impl Iterator<Item 
     network
         .get_links(first)
         .iter()
-        .filter(|link| !set.contains(&link))
+        .filter(|link| !set.contains(link))
         .filter(|link| set.iter().skip(1).all(|x| network.has_link(*x, **link)))
         .copied()
 }
@@ -118,48 +118,6 @@ impl Network {
     fn iter(&self) -> impl Iterator<Item = (Comp, &BTreeSet<Comp>)> {
         self.0.iter().map(|(c, v)| (*c, v))
     }
-
-    fn comps(&self) -> impl Iterator<Item = Comp> + use<'_> {
-        self.0.keys().copied()
-    }
-
-    fn first(&self) -> Option<Comp> {
-        self.0.keys().next().copied()
-    }
-
-    fn into_subnets(mut self) -> Vec<Self> {
-        let mut v = vec![];
-        while let Some(comp) = self.first() {
-            v.push(self.extract_subnet(comp))
-        }
-        v
-    }
-
-    fn extract_subnet(&mut self, comp: Comp) -> Self {
-        self.subnet_comps(comp)
-            .into_iter()
-            .fold(Network::new(), |mut acc, comp| {
-                if let Some(v) = self.0.remove(&comp) {
-                    acc.0.insert(comp, v);
-                }
-                acc
-            })
-    }
-
-    fn subnet_comps(&self, comp: Comp) -> HashSet<Comp> {
-        let mut work = vec![comp];
-        let mut set = HashSet::new();
-        while let Some(comp) = work.pop() {
-            if let Some(links) = self.0.get(&comp) {
-                for link in links {
-                    if set.insert(*link) {
-                        work.push(*link);
-                    }
-                }
-            }
-        }
-        set
-    }
 }
 
 fn parse_network(input: &str) -> anyhow::Result<Network> {
@@ -183,7 +141,7 @@ struct Comp([u8; 2]);
 
 impl Comp {
     fn parse(src: &str) -> Option<Comp> {
-        (src.len() == 2 && src.chars().all(|c| ('a'..='z').contains(&c))).then(|| {
+        (src.len() == 2 && src.chars().all(|c| c.is_ascii_lowercase())).then(|| {
             let b = src.as_bytes();
             Comp([b[0], b[1]])
         })
