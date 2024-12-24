@@ -6,47 +6,21 @@ pub fn run(input: &str) -> anyhow::Result<String> {
     let p = Problem::parse(input)?;
     // 3302442726 too low
     let s1 = star1(&p);
-    let s2 = p.circuit.len();
+    let s2 = p.circuit.0.len();
     Ok(format!("{s1} {s2}"))
 }
 
 fn star1(p: &Problem) -> u64 {
-    (0..u64::BITS).fold(0, |mut acc, i| {
-        let wire = Wire::parse(&format!("z{:02}", i)).unwrap();
-        if p.bit(wire) == Some(true) {
-            acc |= 1 << i;
-        }
-        acc
-    })
+    let nbits = p.circuit.output_bits();
+    p.circuit.output(p.x, p.y, nbits).unwrap_or(0)
 }
 
-struct Problem {
-    wires: HashMap<Wire, bool>,
-    circuit: HashMap<Wire, Gate>,
-}
+struct Circuit(HashMap<Wire, Gate>);
 
-impl Problem {
-    fn parse(input: &str) -> anyhow::Result<Problem> {
-        let mut it = input.lines();
-
-        let mut wires = HashMap::new();
-        for line in it.by_ref() {
-            if line.is_empty() {
-                break;
-            }
-            let (l, r) = line
-                .split_once(": ")
-                .ok_or_else(|| anyhow!("invalid: {line}"))?;
-            let wire = Wire::parse(l).ok_or_else(|| anyhow!("invalid: {line}"))?;
-            let value = r
-                .parse::<u8>()
-                .map(|n| n != 0)
-                .map_err(anyhow::Error::msg)?;
-            wires.insert(wire, value);
-        }
-
-        let mut circuit = HashMap::new();
-        for line in it {
+impl Circuit {
+    fn parse(input: &str) -> anyhow::Result<Self> {
+        let mut m = HashMap::new();
+        for line in input.lines() {
             let mut it = line.split_ascii_whitespace();
             let inv = || anyhow!("invalid: {line}");
             let a = it
@@ -65,20 +39,134 @@ impl Problem {
                 .next()
                 .and_then(|part| Wire::parse(part))
                 .ok_or_else(inv)?;
-            circuit.insert(out, Gate { a, b, op });
+            m.insert(out, Gate { a, b, op });
         }
-
-        Ok(Problem { wires, circuit })
+        Ok(Self(m))
     }
 
-    fn bit(&self, wire: Wire) -> Option<bool> {
-        if let Some(x) = self.wires.get(&wire) {
-            return Some(*x);
+    fn output_bits(&self) -> u32 {
+        self.0
+            .keys()
+            .filter_map(|&wire| {
+                if let Some((c, n)) = wire.char_num() {
+                    if c == 'z' {
+                        return Some(n + 1);
+                    }
+                }
+                None
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn output(&self, x: u64, y: u64, nbits: u32) -> Option<u64> {
+        (0..nbits).try_fold(0, |acc, i| {
+            let wire = Wire::parse(&format!("z{:02}", i)).unwrap();
+            match self.bit(x, y, wire) {
+                Lookup::Valid(v) => Some(acc | ((v as u64) << i)),
+                _ => None,
+            }
+        })
+    }
+
+    fn bit(&self, x: u64, y: u64, wire: Wire) -> Lookup {
+        let mut vis = HashMap::new();
+        self.bit_impl(&mut vis, x, y, wire)
+    }
+
+    fn bit_impl(&self, vis: &mut HashMap<Wire, Lookup>, x: u64, y: u64, wire: Wire) -> Lookup {
+        use Lookup::*;
+        if let Some((c, n)) = wire.char_num() {
+            match c {
+                'x' => {
+                    return Valid((x & (1 << n)) != 0);
+                }
+                'y' => {
+                    return Valid((y & (1 << n)) != 0);
+                }
+                _ => {}
+            }
         }
-        let g = self.circuit.get(&wire)?;
-        let a = self.bit(g.a)?;
-        let b = self.bit(g.b)?;
-        Some(g.result(a, b))
+        if vis.get(&wire) == Some(&Cycle) {
+            return Cycle;
+        }
+
+        let mut is_cycle = false;
+        let r = vis
+            .entry(wire)
+            .and_modify(|v| {
+                if *v == Cycle {
+                    is_cycle = true;
+                }
+            })
+            .or_insert(Cycle);
+        match *r {
+            Cycle => {
+                if is_cycle {
+                    return Cycle;
+                };
+            }
+            _ => {
+                return *r;
+            }
+        }
+        let r = match self.0.get(&wire) {
+            Some(g) => {
+                let a = self.bit_impl(vis, x, y, g.a);
+                let b = self.bit_impl(vis, x, y, g.b);
+                if let (Valid(a), Valid(b)) = (a, b) {
+                    Valid(g.result(a, b))
+                } else {
+                    Invalid
+                }
+            }
+            None => Invalid,
+        };
+        *vis.get_mut(&wire).unwrap() = r;
+        r
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Lookup {
+    Cycle,
+    Invalid,
+    Valid(bool),
+}
+
+struct Problem {
+    x: u64,
+    y: u64,
+    circuit: Circuit,
+}
+
+impl Problem {
+    fn parse(input: &str) -> anyhow::Result<Problem> {
+        let (l, r) = input
+            .split_once("\n\n")
+            .ok_or_else(|| anyhow!("invalid input"))?;
+
+        let mut x = 0;
+        let mut y = 0;
+        for line in l.lines() {
+            let inv = || anyhow!("invalid: {line}");
+            let (l, r) = line.split_once(": ").ok_or_else(inv)?;
+            let wire = Wire::parse(l).ok_or_else(|| anyhow!("invalid: {line}"))?;
+            let value = r.parse::<u64>().map_err(anyhow::Error::msg)?;
+            match wire.char_num() {
+                Some(('x', n)) => {
+                    x |= value << n;
+                }
+                Some(('y', n)) => {
+                    y |= value << n;
+                }
+                _ => return Err(inv()),
+            }
+        }
+
+        let circuit = Circuit::parse(r)?;
+
+        Ok(Problem { x, y, circuit })
     }
 }
 
@@ -154,6 +242,14 @@ impl Wire {
         } else {
             None
         }
+    }
+
+    fn char_num(&self) -> Option<(char, u32)> {
+        self.num().map(|n| (self.0[0] as char, n))
+    }
+
+    fn num(&self) -> Option<u32> {
+        self.as_str()[1..].parse().ok()
     }
 
     fn as_str(&self) -> &str {
@@ -243,6 +339,22 @@ tgd XOR rvg -> z12
 tnw OR pbm -> gnj
 "#
         .trim();
+
+        use Lookup::*;
+
+        let p1 = Problem::parse(sample1).unwrap();
+        assert_eq!(p1.circuit.output_bits(), 3);
+
+        let cb1 = |s: &str| {
+            let wire = Wire::parse(s).unwrap();
+            p1.circuit.bit(p1.x, p1.y, wire)
+        };
+        assert_eq!(cb1("z00"), Valid(false));
+        assert_eq!(cb1("z01"), Valid(false));
+        assert_eq!(cb1("z02"), Valid(true));
+
+        let p2 = Problem::parse(sample2).unwrap();
+        assert_eq!(p2.circuit.output_bits(), 13);
 
         let s1 = |input| star1(&Problem::parse(input).unwrap());
         assert_eq!(s1(sample1), 4);
