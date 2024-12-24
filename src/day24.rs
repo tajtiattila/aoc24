@@ -1,12 +1,12 @@
 use anyhow::anyhow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
     let p = Problem::parse(input)?;
     // 3302442726 too low
     let s1 = star1(&p);
-    let s2 = p.circuit.0.len();
+    let s2 = star2(&p);
     Ok(format!("{s1} {s2}"))
 }
 
@@ -15,6 +15,104 @@ fn star1(p: &Problem) -> u64 {
     p.circuit.output(p.x, p.y, nbits).unwrap_or(0)
 }
 
+fn star2(p: &Problem) -> String {
+    find_fix(&p.circuit, is_add)
+}
+
+fn find_fix<F: FnMut(&Circuit) -> bool>(c: &Circuit, mut f: F) -> String {
+    const MAX_SWAPS: usize = 4;
+    let wire_pairs = c.wire_pairs().collect::<Vec<_>>();
+    let mut vis = HashSet::<SwapSet>::new();
+    let mut work = vec![(SwapSet::new(), c.clone())];
+    while let Some((swaps, c)) = work.pop() {
+        if f(&c) {
+            return swaps.wires().fold(String::new(), |acc, wire| {
+                let sep = if acc.is_empty() { "" } else { "," };
+                acc + &format!("{}{}", sep, wire.as_str())
+            });
+        }
+        if swaps.len() >= MAX_SWAPS {
+            continue;
+        }
+        for (a, b) in &wire_pairs {
+            if let Some(swaps) = swaps.with(*a, *b) {
+                if !vis.contains(&swaps) {
+                    let mut c = c.clone();
+                    c.swap(*a, *b);
+
+                    work.push((swaps.clone(), c));
+                    vis.insert(swaps);
+                }
+            }
+        }
+    }
+    String::from("invalid")
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct SwapSet(BTreeMap<Wire, Wire>);
+
+impl SwapSet {
+    fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn with(&self, a: Wire, b: Wire) -> Option<Self> {
+        (!(self.0.contains_key(&a) || self.0.contains_key(&b))).then(|| {
+            let mut m = self.0.clone();
+            m.insert(a, b);
+            m.insert(b, a);
+            Self(m)
+        })
+    }
+
+    fn wires(&self) -> impl Iterator<Item = Wire> + use<'_> {
+        self.0.keys().copied()
+    }
+}
+
+#[allow(unused)]
+fn is_and(c: &Circuit) -> bool {
+    let nbits = c.output_bits();
+    if nbits == 0 {
+        return false;
+    }
+    for i in 0..(nbits - 1) {
+        let m = 1 << i;
+        if c.output(m, m, nbits) != Some(m) {
+            return false;
+        }
+        if c.output(m, 0, nbits) != Some(0) {
+            return false;
+        }
+        if c.output(m, m - 1, nbits) != Some(0) {
+            return false;
+        }
+    }
+    true
+}
+fn is_add(c: &Circuit) -> bool {
+    let nbits = c.output_bits();
+    if nbits == 0 {
+        return false;
+    }
+    for i in 0..(nbits - 1) {
+        let m = 1 << i;
+        if c.output(m, m, nbits) != Some(2 * m) {
+            return false;
+        }
+        if c.output(m, m - 1, nbits) != Some(2 * m - 1) {
+            return false;
+        }
+    }
+    true
+}
+
+#[derive(Debug, Clone)]
 struct Circuit(HashMap<Wire, Gate>);
 
 impl Circuit {
@@ -23,25 +121,34 @@ impl Circuit {
         for line in input.lines() {
             let mut it = line.split_ascii_whitespace();
             let inv = || anyhow!("invalid: {line}");
-            let a = it
-                .next()
-                .and_then(|part| Wire::parse(part))
-                .ok_or_else(inv)?;
-            let op = it.next().and_then(|part| Op::parse(part)).ok_or_else(inv)?;
-            let b = it
-                .next()
-                .and_then(|part| Wire::parse(part))
-                .ok_or_else(inv)?;
+            let a = it.next().and_then(Wire::parse).ok_or_else(inv)?;
+            let op = it.next().and_then(Op::parse).ok_or_else(inv)?;
+            let b = it.next().and_then(Wire::parse).ok_or_else(inv)?;
             if it.next() != Some("->") {
                 return Err(inv());
             }
-            let out = it
-                .next()
-                .and_then(|part| Wire::parse(part))
-                .ok_or_else(inv)?;
+            let out = it.next().and_then(Wire::parse).ok_or_else(inv)?;
             m.insert(out, Gate { a, b, op });
         }
         Ok(Self(m))
+    }
+
+    fn wire_pairs(&self) -> impl Iterator<Item = (Wire, Wire)> + use<'_> {
+        self.0
+            .keys()
+            .enumerate()
+            .flat_map(|(i, &a)| self.0.keys().skip(i + 1).map(move |&b| (a, b)))
+    }
+
+    fn swap(&mut self, a: Wire, b: Wire) -> bool {
+        if let (Some(ag), Some(br)) = (self.0.get(&a).copied(), self.0.get_mut(&b)) {
+            let bg = *br;
+            *br = ag;
+            *self.0.get_mut(&a).unwrap() = bg;
+            true
+        } else {
+            false
+        }
     }
 
     fn output_bits(&self) -> u32 {
@@ -190,10 +297,10 @@ impl Op {
 
     fn as_str(&self) -> &'static str {
         use Op::*;
-        match self {
-            &And => "AND",
-            &Or => "OR",
-            &Xor => "XOR",
+        match *self {
+            And => "AND",
+            Or => "OR",
+            Xor => "XOR",
         }
     }
 }
@@ -228,7 +335,7 @@ impl Gate {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct Wire([u8; 3]);
 
 impl Wire {
@@ -359,5 +466,40 @@ tnw OR pbm -> gnj
         let s1 = |input| star1(&Problem::parse(input).unwrap());
         assert_eq!(s1(sample1), 4);
         assert_eq!(s1(sample2), 2024);
+
+        assert!(!is_add(&p1.circuit));
+        assert!(!is_add(&p2.circuit));
+
+        let sample3 = r#"
+x00: 0
+x01: 1
+x02: 0
+x03: 1
+x04: 0
+x05: 1
+y00: 0
+y01: 0
+y02: 1
+y03: 1
+y04: 0
+y05: 1
+
+x00 AND y00 -> z05
+x01 AND y01 -> z02
+x02 AND y02 -> z01
+x03 AND y03 -> z03
+x04 AND y04 -> z04
+x05 AND y05 -> z00
+"#
+        .trim();
+        let p3 = Problem::parse(sample3).unwrap();
+
+        let mut c3 = p3.circuit.clone();
+        let w = |s| Wire::parse(s).unwrap();
+        c3.swap(w("z00"), w("z05"));
+        c3.swap(w("z01"), w("z02"));
+        println!("{c3:?}");
+        assert!(is_and(&c3));
+        assert_eq!(&find_fix(&p3.circuit, is_and), "z00,z01,z02,z05");
     }
 }
