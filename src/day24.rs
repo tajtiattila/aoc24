@@ -1,5 +1,6 @@
 use anyhow::anyhow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fmt;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
@@ -16,37 +17,94 @@ fn star1(p: &Problem) -> u64 {
 }
 
 fn star2(p: &Problem) -> String {
-    find_fix(&p.circuit, is_add)
+    find_fix(&p.circuit, score_add)
 }
 
-fn find_fix<F: FnMut(&Circuit) -> bool>(c: &Circuit, mut f: F) -> String {
+fn find_fix<F: FnMut(&Circuit) -> Option<usize>>(c: &Circuit, mut f_score: F) -> String {
+    let Some(score) = f_score(c) else {
+        return String::from("empty");
+    };
+
     const MAX_SWAPS: usize = 4;
     let wire_pairs = c.wire_pairs().collect::<Vec<_>>();
     let mut vis = HashSet::<SwapSet>::new();
-    let mut work = vec![(SwapSet::new(), c.clone())];
-    while let Some((swaps, c)) = work.pop() {
-        if f(&c) {
-            return swaps.wires().fold(String::new(), |acc, wire| {
-                let sep = if acc.is_empty() { "" } else { "," };
-                acc + &format!("{}{}", sep, wire.as_str())
-            });
-        }
-        if swaps.len() >= MAX_SWAPS {
-            continue;
-        }
+    let mut work = BinaryHeap::from([HeapEntry::new(score, SwapSet::new(), c.clone())]);
+    let mut counter = 0;
+    while let Some(HeapEntry {
+        score,
+        swaps,
+        circuit,
+    }) = work.pop()
+    {
+        println!("{:5}: {:?}", score, swaps);
         for (a, b) in &wire_pairs {
+            //println!("  {a}-{b}  {vis:?}");
             if let Some(swaps) = swaps.with(*a, *b) {
+                //println!("    {swaps:?}");
                 if !vis.contains(&swaps) {
-                    let mut c = c.clone();
+                    let mut c = circuit.clone();
                     c.swap(*a, *b);
 
-                    work.push((swaps.clone(), c));
-                    vis.insert(swaps);
+                    let score = match f_score(&c) {
+                        Some(n) => n,
+                        None => {
+                            // exact match
+                            println!("exact");
+                            return swaps.wires().fold(String::new(), |acc, wire| {
+                                let sep = if acc.is_empty() { "" } else { "," };
+                                acc + &format!("{}{}", sep, wire.as_str())
+                            });
+                        }
+                    };
+
+                    println!("  {counter:6}  {a}-{b}  {score:5}  {swaps:?}");
+                    counter += 1;
+                    if swaps.len() < 2 * MAX_SWAPS {
+                        work.push(HeapEntry::new(score, swaps.clone(), c));
+                        vis.insert(swaps);
+                    }
                 }
             }
         }
     }
     String::from("invalid")
+}
+
+#[derive(Debug, Clone)]
+struct HeapEntry {
+    score: usize,
+    swaps: SwapSet,
+    circuit: Circuit,
+}
+
+impl std::cmp::Eq for HeapEntry {}
+
+impl std::cmp::PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+    }
+}
+
+impl std::cmp::Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score.cmp(&other.score)
+    }
+}
+
+impl std::cmp::PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl HeapEntry {
+    fn new(score: usize, swaps: SwapSet, circuit: Circuit) -> Self {
+        Self {
+            score,
+            swaps,
+            circuit,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -76,40 +134,75 @@ impl SwapSet {
 }
 
 #[allow(unused)]
-fn is_and(c: &Circuit) -> bool {
+fn score_and(c: &Circuit) -> Option<usize> {
     let nbits = c.output_bits();
     if nbits == 0 {
-        return false;
+        return None;
     }
-    for i in 0..(nbits - 1) {
-        let m = 1 << i;
-        if c.output(m, m, nbits) != Some(m) {
-            return false;
-        }
-        if c.output(m, 0, nbits) != Some(0) {
-            return false;
-        }
-        if c.output(m, m - 1, nbits) != Some(0) {
-            return false;
-        }
-    }
-    true
+    (0..(nbits - 1))
+        .fold(ScoreImpl::new(), |acc, i| {
+            let m = 1 << i;
+            acc.fold(c, nbits, m, m, m)
+                .fold(c, nbits, m, 0, 0)
+                .fold(c, nbits, m, m - 1, 0)
+        })
+        .keep_going_score()
 }
-fn is_add(c: &Circuit) -> bool {
+
+fn score_add(c: &Circuit) -> Option<usize> {
     let nbits = c.output_bits();
     if nbits == 0 {
-        return false;
+        return None;
     }
-    for i in 0..(nbits - 1) {
-        let m = 1 << i;
-        if c.output(m, m, nbits) != Some(2 * m) {
-            return false;
-        }
-        if c.output(m, m - 1, nbits) != Some(2 * m - 1) {
-            return false;
+    (0..(nbits - 1))
+        .fold(ScoreImpl::new(), |acc, i| {
+            let m = 1 << i;
+            acc.fold(c, nbits, m, m, 2 * m)
+                .fold(c, nbits, m - 1, m - 1, (m - 1) * (m - 1))
+                .fold(c, nbits, m - 1, m, m * (m - 1))
+        })
+        .keep_going_score()
+}
+
+#[derive(Debug, Copy, Clone)]
+struct ScoreImpl {
+    len: u8,
+    match_: u8,
+    valid: u8,
+}
+
+impl ScoreImpl {
+    fn new() -> Self {
+        Self {
+            len: 0,
+            match_: 0,
+            valid: 0,
         }
     }
-    true
+
+    fn fold(self, c: &Circuit, nbits: u32, a: u64, b: u64, want: u64) -> Self {
+        let Self {
+            mut len,
+            mut match_,
+            mut valid,
+        } = self;
+        len += 1;
+        if let Some(o) = c.output(a, b, nbits) {
+            valid += 1;
+            if o == want {
+                match_ += 1;
+            }
+        }
+        Self { len, match_, valid }
+    }
+
+    fn keep_going_score(&self) -> Option<usize> {
+        if self.match_ == self.len {
+            None
+        } else {
+            Some((self.match_ as usize) * 100 + (self.valid as usize))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -467,9 +560,6 @@ tnw OR pbm -> gnj
         assert_eq!(s1(sample1), 4);
         assert_eq!(s1(sample2), 2024);
 
-        assert!(!is_add(&p1.circuit));
-        assert!(!is_add(&p2.circuit));
-
         let sample3 = r#"
 x00: 0
 x01: 1
@@ -499,7 +589,7 @@ x05 AND y05 -> z00
         c3.swap(w("z00"), w("z05"));
         c3.swap(w("z01"), w("z02"));
         println!("{c3:?}");
-        assert!(is_and(&c3));
-        assert_eq!(&find_fix(&p3.circuit, is_and), "z00,z01,z02,z05");
+        assert_eq!(score_and(&c3), None);
+        assert_eq!(&find_fix(&p3.circuit, score_and), "z00,z01,z02,z05");
     }
 }
