@@ -5,7 +5,12 @@ use std::fmt;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
     let p = Problem::parse(input)?;
-    // 3302442726 too low
+    let bads = bad_add_bits(&p.circuit);
+    println!("{:?}", bads);
+    for b in &bads {
+        let deps = p.circuit.deps(*b);
+        println!("  {:5} {:?}", deps.len(), deps);
+    }
     let s1 = star1(&p);
     let s2 = star2(&p);
     Ok(format!("{s1} {s2}"))
@@ -17,53 +22,142 @@ fn star1(p: &Problem) -> u64 {
 }
 
 fn star2(p: &Problem) -> String {
-    find_fix(&p.circuit, score_add)
+    find_fix_add(&p.circuit)
 }
 
-fn find_fix<F: FnMut(&Circuit) -> Option<usize>>(c: &Circuit, mut f_score: F) -> String {
+fn bad_add_bits(c: &Circuit) -> Vec<Wire> {
+    let mut r = vec![];
+    foreach_add_bit(c, |i, ok| {
+        if !ok {
+            r.push(Wire::parse(&format!("z{:02}", i)).unwrap());
+        }
+    });
+    r
+}
+
+fn foreach_add_bit<F: FnMut(u32, bool)>(c: &Circuit, mut f: F) {
+    let nbits = c.output_bits();
+    let out = |a, b, m, eq| c.output(a, b, nbits).map(|n| n & m) == Some(eq);
+
+    let bit_0_ok = out(0, 0, 1, 0) && out(1, 0, 1, 1) && out(0, 1, 1, 1) && out(1, 1, 1, 0);
+    f(0, bit_0_ok);
+
+    for i in 1..nbits - 1 {
+        let m = 1 << i;
+        let h = m >> 1;
+
+        let bit_i_ok = out(0, 0, m, 0)
+            && out(0, h, m, 0)
+            && out(h, 0, m, 0)
+            && out(0, m, m, m)
+            && out(m, 0, m, m)
+            && out(h, h, m, m)
+            && out(m, m, m, 0)
+            && out(m + h, h, m, 0)
+            && out(m, m + h, m, 0);
+        f(i, bit_i_ok);
+    }
+}
+
+fn find_fix_add(c: &Circuit) -> String {
+    let mut sets = bad_add_bits(c)
+        .into_iter()
+        .map(|wire| c.deps(wire))
+        .collect::<Vec<_>>();
+    sets.sort_by_key(|s| s.len());
+
+    let set_pairs = sets
+        .iter()
+        .enumerate()
+        .flat_map(|(i, s0)| sets.iter().skip(i + 1).map(move |s1| (s0, s1)));
+
+    let wire_pairs_iter = set_pairs
+        .flat_map(|(s0, s1)| s0.iter().flat_map(|w0| s1.iter().map(move |w1| (w0, w1))))
+        .filter_map(|(&w0, &w1)| {
+            use std::cmp::Ordering::*;
+            match w0.cmp(&w1) {
+                Less => Some((w0, w1)),
+                Equal => None,
+                Greater => Some((w1, w0)),
+            }
+        });
+
+    let mut wire_pairs = vec![];
+    let mut vis = HashSet::new();
+    for (w0, w1) in wire_pairs_iter {
+        if vis.insert((w0, w1)) {
+            wire_pairs.push((w0, w1));
+        }
+    }
+
+    find_fix_impl(c, &wire_pairs, score_add)
+}
+
+fn find_fix<F>(c: &Circuit, f_score: F) -> String
+where
+    F: FnMut(&Circuit) -> Option<usize>,
+{
+    let wire_pairs = c.wire_pairs().collect::<Vec<_>>();
+    find_fix_impl(c, &wire_pairs, f_score)
+}
+
+fn find_fix_impl<F>(c: &Circuit, wire_pairs: &[(Wire, Wire)], mut f_score: F) -> String
+where
+    F: FnMut(&Circuit) -> Option<usize>,
+{
     let Some(score) = f_score(c) else {
         return String::from("empty");
     };
+    const MSCORE: usize = 3;
+    let score = MSCORE * score;
 
     const MAX_SWAPS: usize = 4;
-    let wire_pairs = c.wire_pairs().collect::<Vec<_>>();
     let mut vis = HashSet::<SwapSet>::new();
-    let mut work = BinaryHeap::from([HeapEntry::new(score, SwapSet::new(), c.clone())]);
+    let mut work = BinaryHeap::from([HeapEntry::new(score, SwapSet::new(), c.clone(), 0)]);
     let mut counter = 0;
     while let Some(HeapEntry {
         score,
         swaps,
         circuit,
+        wire_idx,
     }) = work.pop()
     {
-        println!("{:5}: {:?}", score, swaps);
-        for (a, b) in &wire_pairs {
-            //println!("  {a}-{b}  {vis:?}");
-            if let Some(swaps) = swaps.with(*a, *b) {
-                //println!("    {swaps:?}");
-                if !vis.contains(&swaps) {
-                    let mut c = circuit.clone();
-                    c.swap(*a, *b);
+        if let Some((next_wire_idx, a, b, new_swaps)) = wire_pairs[wire_idx..]
+            .iter()
+            .enumerate()
+            .find_map(|(idx, (a, b))| {
+                let new_swaps = swaps.with(*a, *b)?;
+                (!vis.contains(&new_swaps)).then_some((wire_idx + idx + 1, *a, *b, new_swaps))
+            })
+        {
+            let mut c = circuit.clone();
+            c.swap(a, b);
 
-                    let score = match f_score(&c) {
-                        Some(n) => n,
-                        None => {
-                            // exact match
-                            println!("exact");
-                            return swaps.wires().fold(String::new(), |acc, wire| {
-                                let sep = if acc.is_empty() { "" } else { "," };
-                                acc + &format!("{}{}", sep, wire.as_str())
-                            });
-                        }
-                    };
-
-                    println!("  {counter:6}  {a}-{b}  {score:5}  {swaps:?}");
-                    counter += 1;
-                    if swaps.len() < 2 * MAX_SWAPS {
-                        work.push(HeapEntry::new(score, swaps.clone(), c));
-                        vis.insert(swaps);
-                    }
+            let new_score = match f_score(&c) {
+                Some(n) => n,
+                None => {
+                    // exact match
+                    println!("exact");
+                    return new_swaps.wires().fold(String::new(), |acc, wire| {
+                        let sep = if acc.is_empty() { "" } else { "," };
+                        acc + &format!("{}{}", sep, wire.as_str())
+                    });
                 }
+            };
+            let new_score = if new_score > 0 {
+                MSCORE * new_score - new_swaps.len()
+            } else {
+                0
+            };
+
+            println!("  {counter:6}  {a}-{b}  {new_score:5}  {new_swaps:?}");
+            counter += 1;
+            if new_swaps.len() < 2 * MAX_SWAPS {
+                work.push(HeapEntry::new(new_score, new_swaps.clone(), c, 0));
+                vis.insert(new_swaps);
+            }
+            if next_wire_idx < wire_pairs.len() {
+                work.push(HeapEntry::new(score, swaps, circuit, next_wire_idx));
             }
         }
     }
@@ -75,6 +169,18 @@ struct HeapEntry {
     score: usize,
     swaps: SwapSet,
     circuit: Circuit,
+    wire_idx: usize,
+}
+
+impl HeapEntry {
+    fn new(score: usize, swaps: SwapSet, circuit: Circuit, wire_idx: usize) -> Self {
+        Self {
+            score,
+            swaps,
+            circuit,
+            wire_idx,
+        }
+    }
 }
 
 impl std::cmp::Eq for HeapEntry {}
@@ -94,16 +200,6 @@ impl std::cmp::Ord for HeapEntry {
 impl std::cmp::PartialOrd for HeapEntry {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl HeapEntry {
-    fn new(score: usize, swaps: SwapSet, circuit: Circuit) -> Self {
-        Self {
-            score,
-            swaps,
-            circuit,
-        }
     }
 }
 
@@ -150,6 +246,16 @@ fn score_and(c: &Circuit) -> Option<usize> {
 }
 
 fn score_add(c: &Circuit) -> Option<usize> {
+    let mut n_all = 0;
+    let mut n_ok = 0;
+    foreach_add_bit(c, |_, ok| {
+        n_all += 1;
+        n_ok += ok as usize;
+    });
+    (n_all != n_ok).then_some(n_ok)
+}
+
+fn score_add_0(c: &Circuit) -> Option<usize> {
     let nbits = c.output_bits();
     if nbits == 0 {
         return None;
@@ -157,9 +263,9 @@ fn score_add(c: &Circuit) -> Option<usize> {
     (0..(nbits - 1))
         .fold(ScoreImpl::new(), |acc, i| {
             let m = 1 << i;
-            acc.fold(c, nbits, m, m, 2 * m)
-                .fold(c, nbits, m - 1, m - 1, (m - 1) * (m - 1))
-                .fold(c, nbits, m - 1, m, m * (m - 1))
+            acc.fold(c, nbits, m, m, m + m)
+                .fold(c, nbits, m - 1, m - 1, (m - 1) + (m - 1))
+                .fold(c, nbits, m - 1, m, m + (m - 1))
         })
         .keep_going_score()
 }
@@ -205,6 +311,28 @@ impl ScoreImpl {
     }
 }
 
+/*
+struct PackedCircuit {
+    zrng: Range<u16>,
+    gate: Vec<PackedGate>,
+
+}
+
+impl PackedCircuit {
+    fn bit(&self, x: u64, y: u64) {
+
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum PackGate {
+    Input(bool),
+    And(u16, u16),
+    Or(u16, u16),
+    Xor(u16, u16),
+}
+*/
+
 #[derive(Debug, Clone)]
 struct Circuit(HashMap<Wire, Gate>);
 
@@ -231,6 +359,21 @@ impl Circuit {
             .keys()
             .enumerate()
             .flat_map(|(i, &a)| self.0.keys().skip(i + 1).map(move |&b| (a, b)))
+    }
+
+    fn deps(&self, wire: Wire) -> HashSet<Wire> {
+        let mut r = HashSet::new();
+        self.deps_impl(&mut r, wire);
+        r
+    }
+
+    fn deps_impl(&self, set: &mut HashSet<Wire>, wire: Wire) {
+        if let Some(g) = self.0.get(&wire) {
+            if set.insert(wire) {
+                self.deps_impl(set, g.a);
+                self.deps_impl(set, g.b);
+            }
+        }
     }
 
     fn swap(&mut self, a: Wire, b: Wire) -> bool {
