@@ -16,10 +16,6 @@ fn star1(p: &Problem) -> u64 {
     p.circuit.output(p.x, p.y, nbits).unwrap_or(0)
 }
 
-fn star2(p: &Problem) -> String {
-    find_fix_add(&p.circuit)
-}
-
 fn analyze_adder(c: &Circuit, verbose: bool) -> anyhow::Result<String> {
     use Op::*;
 
@@ -37,7 +33,7 @@ fn analyze_adder(c: &Circuit, verbose: bool) -> anyhow::Result<String> {
         println!("00                     {}   {}", s0, carry);
     }
 
-    for i in 1..nbits-1 {
+    for i in 1..nbits - 1 {
         let FullAdder { s0, c0, c1, si, ci } = match aa.find_full_adder(i, carry) {
             Ok(a) => a,
             Err(msg) => bail!("bit {:02}: {}", i, msg),
@@ -82,14 +78,14 @@ impl AddAnalyzer {
         let xi = Wire::x(bit);
         let yi = Wire::y(bit);
         let Some(s0) = self.find_gate(Xor, xi, yi) else {
-            return Err(format!("s0 not found"));
+            return Err("s0 not found".to_string());
         };
         let Some(mut c0) = self.find_gate(And, xi, yi) else {
-            return Err(format!("c0 not found"));
+            return Err("c0 not found".to_string());
         };
         if c0 == zi {
             let Some(si) = self.find_gate(Xor, s0, carry) else {
-                return Err(format!("c0==zi but si not found"));
+                return Err("c0==zi but si not found".to_string());
             };
             self.swap(si, zi);
             c0 = si;
@@ -125,17 +121,17 @@ impl AddAnalyzer {
         use Op::*;
         let zi = Wire::z(bit);
         let Some(mut si) = self.find_gate(Xor, s0, carry) else {
-            return Err(format!("si not found"));
+            return Err("si not found".to_string());
         };
         if si != zi {
             self.swap(si, zi);
             si = zi;
         }
         let Some(c1) = self.find_gate(And, s0, carry) else {
-            return Err(format!("c1 not found"));
+            return Err("c1 not found".to_string());
         };
         let Some(ci) = self.find_gate(Or, c0, c1) else {
-            return Err(format!("ci not found"));
+            return Err("ci not found".to_string());
         };
         Ok(FullAdder { s0, c0, c1, si, ci })
     }
@@ -185,78 +181,7 @@ struct FullAdder {
     ci: Wire,
 }
 
-fn nice<'a>(o: &'a Option<&'a Wire>) -> &'a str {
-    o.map(|w| w.as_str()).unwrap_or(" ? ")
-}
-
-fn bad_add_bits(c: &Circuit) -> Vec<Wire> {
-    let mut r = vec![];
-    foreach_add_bit(c, |i, ok| {
-        if !ok {
-            r.push(Wire::parse(&format!("z{:02}", i)).unwrap());
-        }
-    });
-    r
-}
-
-fn foreach_add_bit<F: FnMut(u32, bool)>(c: &Circuit, mut f: F) {
-    let nbits = c.output_bits();
-    let out = |a, b, m, eq| c.output(a, b, nbits).map(|n| n & m) == Some(eq);
-
-    let bit_0_ok = out(0, 0, 1, 0) && out(1, 0, 1, 1) && out(0, 1, 1, 1) && out(1, 1, 1, 0);
-    f(0, bit_0_ok);
-
-    for i in 1..nbits - 1 {
-        let m = 1 << i;
-        let h = m >> 1;
-
-        let bit_i_ok = out(0, 0, m, 0)
-            && out(0, h, m, 0)
-            && out(h, 0, m, 0)
-            && out(0, m, m, m)
-            && out(m, 0, m, m)
-            && out(h, h, m, m)
-            && out(m, m, m, 0)
-            && out(m + h, h, m, 0)
-            && out(m, m + h, m, 0);
-        f(i, bit_i_ok);
-    }
-}
-
-fn find_fix_add(c: &Circuit) -> String {
-    let mut sets = bad_add_bits(c)
-        .into_iter()
-        .map(|wire| c.deps(wire))
-        .collect::<Vec<_>>();
-    sets.sort_by_key(|s| s.len());
-
-    let set_pairs = sets
-        .iter()
-        .enumerate()
-        .flat_map(|(i, s0)| sets.iter().skip(i + 1).map(move |s1| (s0, s1)));
-
-    let wire_pairs_iter = set_pairs
-        .flat_map(|(s0, s1)| s0.iter().flat_map(|w0| s1.iter().map(move |w1| (w0, w1))))
-        .filter_map(|(&w0, &w1)| {
-            use std::cmp::Ordering::*;
-            match w0.cmp(&w1) {
-                Less => Some((w0, w1)),
-                Equal => None,
-                Greater => Some((w1, w0)),
-            }
-        });
-
-    let mut wire_pairs = vec![];
-    let mut vis = HashSet::new();
-    for (w0, w1) in wire_pairs_iter {
-        if vis.insert((w0, w1)) {
-            wire_pairs.push((w0, w1));
-        }
-    }
-
-    find_fix_impl(c, &wire_pairs, score_add)
-}
-
+#[allow(unused)]
 fn find_fix<F>(c: &Circuit, f_score: F) -> String
 where
     F: FnMut(&Circuit) -> Option<usize>,
@@ -409,31 +334,6 @@ fn score_and(c: &Circuit) -> Option<usize> {
         .keep_going_score()
 }
 
-fn score_add(c: &Circuit) -> Option<usize> {
-    let mut n_all = 0;
-    let mut n_ok = 0;
-    foreach_add_bit(c, |_, ok| {
-        n_all += 1;
-        n_ok += ok as usize;
-    });
-    (n_all != n_ok).then_some(n_ok)
-}
-
-fn score_add_0(c: &Circuit) -> Option<usize> {
-    let nbits = c.output_bits();
-    if nbits == 0 {
-        return None;
-    }
-    (0..(nbits - 1))
-        .fold(ScoreImpl::new(), |acc, i| {
-            let m = 1 << i;
-            acc.fold(c, nbits, m, m, m + m)
-                .fold(c, nbits, m - 1, m - 1, (m - 1) + (m - 1))
-                .fold(c, nbits, m - 1, m, m + (m - 1))
-        })
-        .keep_going_score()
-}
-
 #[derive(Debug, Copy, Clone)]
 struct ScoreImpl {
     len: u8,
@@ -475,28 +375,6 @@ impl ScoreImpl {
     }
 }
 
-/*
-struct PackedCircuit {
-    zrng: Range<u16>,
-    gate: Vec<PackedGate>,
-
-}
-
-impl PackedCircuit {
-    fn bit(&self, x: u64, y: u64) {
-
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-enum PackGate {
-    Input(bool),
-    And(u16, u16),
-    Or(u16, u16),
-    Xor(u16, u16),
-}
-*/
-
 #[derive(Debug, Clone)]
 struct Circuit(HashMap<Wire, Gate>);
 
@@ -523,21 +401,6 @@ impl Circuit {
             .keys()
             .enumerate()
             .flat_map(|(i, &a)| self.0.keys().skip(i + 1).map(move |&b| (a, b)))
-    }
-
-    fn deps(&self, wire: Wire) -> HashSet<Wire> {
-        let mut r = HashSet::new();
-        self.deps_impl(&mut r, wire);
-        r
-    }
-
-    fn deps_impl(&self, set: &mut HashSet<Wire>, wire: Wire) {
-        if let Some(g) = self.0.get(&wire) {
-            if set.insert(wire) {
-                self.deps_impl(set, g.a);
-                self.deps_impl(set, g.b);
-            }
-        }
     }
 
     fn swap(&mut self, a: Wire, b: Wire) -> bool {
