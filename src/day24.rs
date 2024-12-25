@@ -92,14 +92,18 @@ impl AddAnalyzer {
         let s0 = self.find_gate(Xor, xi, yi)?;
         let c0 = self.find_gate(And, xi, yi)?;
 
-        if let Some(a) = self.find_full_adder_step2(bit, carry, s0, c0) {
-            return Some(a);
-        }
-        if let Some(a) = self.find_full_adder_step2(bit, carry, c0, s0) {
-            println!("  swap s0/c0: {} <-> {}", s0, c0);
-            return Some(a);
-        }
-        println!("{bit:02}   {s0}   {c0}   FAILED");
+        let err1 = match self.find_full_adder_step2(bit, carry, s0, c0) {
+            Ok(a) => { return Some(a); }
+            Err(msg) => msg,
+        };
+        let err2 = match self.find_full_adder_step2(bit, carry, c0, s0) {
+            Ok(a) => {
+                println!("  swap s0/c0: {} <-> {}", s0, c0);
+                return Some(a);
+            }
+            Err(msg) => msg,
+        };
+        println!("{bit:02}   {s0}   {c0}   FAILED {err1}/{err2}");
         None
     }
 
@@ -109,18 +113,24 @@ impl AddAnalyzer {
         carry: Wire,
         s0: Wire,
         c0: Wire,
-    ) -> Option<FullAdder> {
+    ) -> Result<FullAdder, String> {
         use Op::*;
         let zi = Wire::z(bit);
-        let mut si = self.find_gate(Xor, s0, carry)?;
+        let Some(mut si) = self.find_gate(Xor, s0, carry) else {
+            return Err(format!("si not found"));
+        };
         if si != zi {
             println!("  swap si!=zi: {} <-> {}", si, zi);
             self.swap(si, zi);
             si = zi;
         }
-        let c1 = self.find_gate(And, s0, carry)?;
-        let ci = self.find_gate(Or, c0, c1)?;
-        Some(FullAdder { s0, c0, c1, si, ci })
+        let Some(c1) = self.find_gate(And, s0, carry) else {
+            return Err(format!("c1 not found"));
+        };
+        let Some(ci) = self.find_gate(Or, c0, c1) else {
+            return Err(format!("ci not found"));
+        };
+        Ok(FullAdder { s0, c0, c1, si, ci })
     }
 
     fn find_gate(&self, op: Op, a: Wire, b: Wire) -> Option<Wire> {
