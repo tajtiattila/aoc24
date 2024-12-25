@@ -5,14 +5,9 @@ use std::fmt;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
     let p = Problem::parse(input)?;
-    let bads = bad_add_bits(&p.circuit);
-    println!("{:?}", bads);
-    for b in &bads {
-        let deps = p.circuit.deps(*b);
-        println!("  {:5} {:?}", deps.len(), deps);
-    }
+    analyze_adder(&p.circuit);
     let s1 = star1(&p);
-    let s2 = star2(&p);
+    let s2 = "";
     Ok(format!("{s1} {s2}"))
 }
 
@@ -23,6 +18,93 @@ fn star1(p: &Problem) -> u64 {
 
 fn star2(p: &Problem) -> String {
     find_fix_add(&p.circuit)
+}
+
+fn analyze_adder(c: &Circuit) {
+    let mut aa = AddAnalyzer::new(c);
+
+    let wx = |n: u32| Wire::parse(&format!("x{n:02}")).unwrap();
+    let wy = |n: u32| Wire::parse(&format!("y{n:02}")).unwrap();
+    let wz = |n: u32| Wire::parse(&format!("z{n:02}")).unwrap();
+
+    let nbits = c.output_bits();
+
+    use Op::*;
+
+    println!(" i  s0_i  c0_i  c1_i   s_i   c_i");
+    let s0 = aa.find_gate(Xor, wx(0), wy(0));
+    let mut carry = aa.find_gate(And, wx(0), wy(0));
+    println!(
+        "00                     {}   {}",
+        nice(&s0.as_ref()),
+        nice(&carry.as_ref())
+    );
+
+    for i in 1..nbits {
+        let zi = wz(i);
+        let s0 = aa.find_gate(Xor, wx(i), wy(i));
+        let c0 = aa.find_gate(And, wx(i), wy(i));
+        let mut si = s0.zip(carry).and_then(|(a, b)| aa.find_gate(Xor, a, b));
+        if si.is_some() && si != Some(zi) {
+            println!(
+                "  swap {} <-> {}",
+                nice(&si.as_ref()),
+                nice(&Some(zi).as_ref())
+            );
+            aa.swap(si.unwrap(), zi);
+            si = Some(zi);
+        }
+        let c1 = s0.zip(carry).and_then(|(a, b)| aa.find_gate(And, a, b));
+        carry = c0.zip(c1).and_then(|(a, b)| aa.find_gate(Or, a, b));
+
+        println!(
+            "{:02}   {}   {}   {}   {}   {}",
+            i,
+            nice(&s0.as_ref()),
+            nice(&c0.as_ref()),
+            nice(&c1.as_ref()),
+            nice(&si.as_ref()),
+            nice(&carry.as_ref())
+        );
+    }
+}
+
+struct AddAnalyzer {
+    wg: HashMap<Wire, Gate>,
+    gw: HashMap<Gate, Wire>,
+}
+
+impl AddAnalyzer {
+    fn new(c: &Circuit) -> Self {
+        let wg = c.0.clone();
+        let gw = wg.iter().map(|(&wire, &gate)| (gate, wire)).collect();
+        Self { wg, gw }
+    }
+
+    fn find_gate(&self, op: Op, a: Wire, b: Wire) -> Option<Wire> {
+        self.gw
+            .get(&Gate { op, a, b })
+            .or_else(|| self.gw.get(&Gate { op, a: b, b: a }))
+            .copied()
+    }
+
+    fn swap(&mut self, a: Wire, b: Wire) -> bool {
+        if let (Some(ag), Some(br)) = (self.wg.get(&a).copied(), self.wg.get_mut(&b)) {
+            let bg = *br;
+            *br = ag;
+            *self.wg.get_mut(&a).unwrap() = bg;
+
+            self.gw.insert(ag, b);
+            self.gw.insert(bg, a);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn nice<'a>(o: &'a Option<&'a Wire>) -> &'a str {
+    o.map(|w| w.as_str()).unwrap_or(" ? ")
 }
 
 fn bad_add_bits(c: &Circuit) -> Vec<Wire> {
