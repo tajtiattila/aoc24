@@ -1,13 +1,13 @@
-use anyhow::anyhow;
+use crate::Cli;
+use anyhow::{anyhow, bail};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fmt;
 
 pub fn run(input: &str) -> anyhow::Result<String> {
     let p = Problem::parse(input)?;
-    analyze_adder(&p.circuit);
     let s1 = star1(&p);
-    let s2 = "";
+    let s2 = analyze_adder(&p.circuit, Cli::global().verbose)?;
     Ok(format!("{s1} {s2}"))
 }
 
@@ -20,64 +20,55 @@ fn star2(p: &Problem) -> String {
     find_fix_add(&p.circuit)
 }
 
-fn analyze_adder(c: &Circuit) {
+fn analyze_adder(c: &Circuit, verbose: bool) -> anyhow::Result<String> {
     use Op::*;
 
-    let mut aa = AddAnalyzer::new(c);
+    let mut aa = AddAnalyzer::new(c, verbose);
     let nbits = c.output_bits();
 
-    println!(" i  s0_i  c0_i  c1_i   s_i   c_i");
     let Some(s0) = aa.find_gate(Xor, Wire::x(0), Wire::y(0)) else {
-        println!("s0 not found");
-        return;
+        bail!("bit 00: s0 not found");
     };
     let Some(mut carry) = aa.find_gate(And, Wire::x(0), Wire::y(0)) else {
-        println!("c0 not found");
-        return;
+        bail!("bit 00: c0 not found");
     };
-    println!("00                     {}   {}", s0, carry);
+    if verbose {
+        println!(" i  s0_i  c0_i  c1_i   s_i   c_i");
+        println!("00                     {}   {}", s0, carry);
+    }
 
-    // rqf XOR hvv -> z21
-    // 20   sqr   fpv   smh   z20   hvv
-    // 21   nnr   rqf    ?     ?     ?
-
-    for i in 1..nbits {
-        /*
-        let zi = Wire::z(i);
-        let s0 = aa.find_gate(Xor, Wire::x(i), Wire::y(i));
-        let c0 = aa.find_gate(And, Wire::x(i), Wire::y(i));
-        let mut si = s0.zip(carry).and_then(|(a, b)| aa.find_gate(Xor, a, b));
-        if si.is_some() && si != Some(zi) {
-            println!(
-                "  swap {} <-> {}",
-                nice(&si.as_ref()),
-                nice(&Some(zi).as_ref())
-            );
-            aa.swap(si.unwrap(), zi);
-            si = Some(zi);
-        }
-        let c1 = s0.zip(carry).and_then(|(a, b)| aa.find_gate(And, a, b));
-        carry = c0.zip(c1).and_then(|(a, b)| aa.find_gate(Or, a, b));
-        */
-        let Some(FullAdder { s0, c0, c1, si, ci }) = aa.find_full_adder(i, carry) else {
-            return;
+    for i in 1..nbits-1 {
+        let FullAdder { s0, c0, c1, si, ci } = match aa.find_full_adder(i, carry) {
+            Ok(a) => a,
+            Err(msg) => bail!("bit {:02}: {}", i, msg),
         };
         carry = ci;
 
-        println!("{:02}   {}   {}   {}   {}   {}", i, s0, c0, c1, si, ci);
+        if verbose {
+            println!("{:02}   {}   {}   {}   {}   {}", i, s0, c0, c1, si, ci);
+        }
     }
+
+    Ok(aa.into_swaps())
 }
 
 struct AddAnalyzer {
     wg: HashMap<Wire, Gate>,
     gw: HashMap<Gate, Wire>,
+    swaps: Vec<Wire>,
+    verbose: bool,
 }
 
 impl AddAnalyzer {
-    fn new(c: &Circuit) -> Self {
+    fn new(c: &Circuit, verbose: bool) -> Self {
         let wg = c.0.clone();
         let gw = wg.iter().map(|(&wire, &gate)| (gate, wire)).collect();
-        Self { wg, gw }
+        Self {
+            wg,
+            gw,
+            swaps: vec![],
+            verbose,
+        }
     }
 
     // xi XOR yi -> s0_i
@@ -85,26 +76,43 @@ impl AddAnalyzer {
     // s0_i XOR c_(i-1) -> s_i (== zi)
     // s0_i AND c_(i-1) -> c1_i
     // c0_i OR c1_i -> c_i
-    fn find_full_adder(&mut self, bit: u32, carry: Wire) -> Option<FullAdder> {
+    fn find_full_adder(&mut self, bit: u32, carry: Wire) -> Result<FullAdder, String> {
         use Op::*;
+        let zi = Wire::z(bit);
         let xi = Wire::x(bit);
         let yi = Wire::y(bit);
-        let s0 = self.find_gate(Xor, xi, yi)?;
-        let c0 = self.find_gate(And, xi, yi)?;
+        let Some(s0) = self.find_gate(Xor, xi, yi) else {
+            return Err(format!("s0 not found"));
+        };
+        let Some(mut c0) = self.find_gate(And, xi, yi) else {
+            return Err(format!("c0 not found"));
+        };
+        if c0 == zi {
+            let Some(si) = self.find_gate(Xor, s0, carry) else {
+                return Err(format!("c0==zi but si not found"));
+            };
+            self.swap(si, zi);
+            c0 = si;
+        }
 
         let err1 = match self.find_full_adder_step2(bit, carry, s0, c0) {
-            Ok(a) => { return Some(a); }
+            Ok(a) => {
+                return Ok(a);
+            }
             Err(msg) => msg,
         };
         let err2 = match self.find_full_adder_step2(bit, carry, c0, s0) {
             Ok(a) => {
-                println!("  swap s0/c0: {} <-> {}", s0, c0);
-                return Some(a);
+                self.swap(s0, c0);
+                return Ok(FullAdder {
+                    s0: c0,
+                    c0: s0,
+                    ..a
+                });
             }
             Err(msg) => msg,
         };
-        println!("{bit:02}   {s0}   {c0}   FAILED {err1}/{err2}");
-        None
+        Err(format!("step 2 failed with {err1}/{err2}"))
     }
 
     fn find_full_adder_step2(
@@ -120,7 +128,6 @@ impl AddAnalyzer {
             return Err(format!("si not found"));
         };
         if si != zi {
-            println!("  swap si!=zi: {} <-> {}", si, zi);
             self.swap(si, zi);
             si = zi;
         }
@@ -131,6 +138,14 @@ impl AddAnalyzer {
             return Err(format!("ci not found"));
         };
         Ok(FullAdder { s0, c0, c1, si, ci })
+    }
+
+    fn into_swaps(mut self) -> String {
+        self.swaps.sort();
+        self.swaps.into_iter().fold(String::new(), |acc, wire| {
+            let sep = if acc.is_empty() { "" } else { "," };
+            acc + &format!("{sep}{wire}")
+        })
     }
 
     fn find_gate(&self, op: Op, a: Wire, b: Wire) -> Option<Wire> {
@@ -148,6 +163,12 @@ impl AddAnalyzer {
 
             self.gw.insert(ag, b);
             self.gw.insert(bg, a);
+
+            if self.verbose {
+                println!("  swap {} <-> {}", a, b);
+            }
+            self.swaps.push(a);
+            self.swaps.push(b);
             true
         } else {
             false
