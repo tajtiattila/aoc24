@@ -21,29 +21,31 @@ fn star2(p: &Problem) -> String {
 }
 
 fn analyze_adder(c: &Circuit) {
-    let mut aa = AddAnalyzer::new(c);
-
-    let wx = |n: u32| Wire::parse(&format!("x{n:02}")).unwrap();
-    let wy = |n: u32| Wire::parse(&format!("y{n:02}")).unwrap();
-    let wz = |n: u32| Wire::parse(&format!("z{n:02}")).unwrap();
-
-    let nbits = c.output_bits();
-
     use Op::*;
 
+    let mut aa = AddAnalyzer::new(c);
+    let nbits = c.output_bits();
+
     println!(" i  s0_i  c0_i  c1_i   s_i   c_i");
-    let s0 = aa.find_gate(Xor, wx(0), wy(0));
-    let mut carry = aa.find_gate(And, wx(0), wy(0));
-    println!(
-        "00                     {}   {}",
-        nice(&s0.as_ref()),
-        nice(&carry.as_ref())
-    );
+    let Some(s0) = aa.find_gate(Xor, Wire::x(0), Wire::y(0)) else {
+        println!("s0 not found");
+        return;
+    };
+    let Some(mut carry) = aa.find_gate(And, Wire::x(0), Wire::y(0)) else {
+        println!("c0 not found");
+        return;
+    };
+    println!("00                     {}   {}", s0, carry);
+
+    // rqf XOR hvv -> z21
+    // 20   sqr   fpv   smh   z20   hvv
+    // 21   nnr   rqf    ?     ?     ?
 
     for i in 1..nbits {
-        let zi = wz(i);
-        let s0 = aa.find_gate(Xor, wx(i), wy(i));
-        let c0 = aa.find_gate(And, wx(i), wy(i));
+        /*
+        let zi = Wire::z(i);
+        let s0 = aa.find_gate(Xor, Wire::x(i), Wire::y(i));
+        let c0 = aa.find_gate(And, Wire::x(i), Wire::y(i));
         let mut si = s0.zip(carry).and_then(|(a, b)| aa.find_gate(Xor, a, b));
         if si.is_some() && si != Some(zi) {
             println!(
@@ -56,16 +58,13 @@ fn analyze_adder(c: &Circuit) {
         }
         let c1 = s0.zip(carry).and_then(|(a, b)| aa.find_gate(And, a, b));
         carry = c0.zip(c1).and_then(|(a, b)| aa.find_gate(Or, a, b));
+        */
+        let Some(FullAdder { s0, c0, c1, si, ci }) = aa.find_full_adder(i, carry) else {
+            return;
+        };
+        carry = ci;
 
-        println!(
-            "{:02}   {}   {}   {}   {}   {}",
-            i,
-            nice(&s0.as_ref()),
-            nice(&c0.as_ref()),
-            nice(&c1.as_ref()),
-            nice(&si.as_ref()),
-            nice(&carry.as_ref())
-        );
+        println!("{:02}   {}   {}   {}   {}   {}", i, s0, c0, c1, si, ci);
     }
 }
 
@@ -79,6 +78,49 @@ impl AddAnalyzer {
         let wg = c.0.clone();
         let gw = wg.iter().map(|(&wire, &gate)| (gate, wire)).collect();
         Self { wg, gw }
+    }
+
+    // xi XOR yi -> s0_i
+    // xi AND yi -> c0_i
+    // s0_i XOR c_(i-1) -> s_i (== zi)
+    // s0_i AND c_(i-1) -> c1_i
+    // c0_i OR c1_i -> c_i
+    fn find_full_adder(&mut self, bit: u32, carry: Wire) -> Option<FullAdder> {
+        use Op::*;
+        let xi = Wire::x(bit);
+        let yi = Wire::y(bit);
+        let s0 = self.find_gate(Xor, xi, yi)?;
+        let c0 = self.find_gate(And, xi, yi)?;
+
+        if let Some(a) = self.find_full_adder_step2(bit, carry, s0, c0) {
+            return Some(a);
+        }
+        if let Some(a) = self.find_full_adder_step2(bit, carry, c0, s0) {
+            println!("  swap s0/c0: {} <-> {}", s0, c0);
+            return Some(a);
+        }
+        println!("{bit:02}   {s0}   {c0}   FAILED");
+        None
+    }
+
+    fn find_full_adder_step2(
+        &mut self,
+        bit: u32,
+        carry: Wire,
+        s0: Wire,
+        c0: Wire,
+    ) -> Option<FullAdder> {
+        use Op::*;
+        let zi = Wire::z(bit);
+        let mut si = self.find_gate(Xor, s0, carry)?;
+        if si != zi {
+            println!("  swap si!=zi: {} <-> {}", si, zi);
+            self.swap(si, zi);
+            si = zi;
+        }
+        let c1 = self.find_gate(And, s0, carry)?;
+        let ci = self.find_gate(Or, c0, c1)?;
+        Some(FullAdder { s0, c0, c1, si, ci })
     }
 
     fn find_gate(&self, op: Op, a: Wire, b: Wire) -> Option<Wire> {
@@ -101,6 +143,15 @@ impl AddAnalyzer {
             false
         }
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct FullAdder {
+    s0: Wire,
+    c0: Wire,
+    c1: Wire,
+    si: Wire,
+    ci: Wire,
 }
 
 fn nice<'a>(o: &'a Option<&'a Wire>) -> &'a str {
@@ -669,12 +720,30 @@ impl Wire {
         }
     }
 
-    fn char_num(&self) -> Option<(char, u32)> {
-        self.num().map(|n| (self.0[0] as char, n))
+    fn x(n: u32) -> Self {
+        Self::from_char_num('x', n)
     }
 
-    fn num(&self) -> Option<u32> {
-        self.as_str()[1..].parse().ok()
+    fn y(n: u32) -> Self {
+        Self::from_char_num('y', n)
+    }
+
+    fn z(n: u32) -> Self {
+        Self::from_char_num('z', n)
+    }
+
+    fn from_char_num(c: char, n: u32) -> Self {
+        if n >= 100 {
+            panic!("invalid wire number: {n}");
+        }
+        let hi = b'0' + (n / 10) as u8;
+        let lo = b'0' + (n % 10) as u8;
+        Self([c as u8, hi, lo])
+    }
+
+    fn char_num(&self) -> Option<(char, u32)> {
+        let n = self.as_str()[1..].parse().ok();
+        n.map(|n| (self.0[0] as char, n))
     }
 
     fn as_str(&self) -> &str {
